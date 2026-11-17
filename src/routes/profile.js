@@ -7,8 +7,9 @@ const express = require("express");
 const { fromNodeHeaders } = require("better-auth/node");
 
 const { getAuth } = require("../lib/auth");
+const { getDB } = require("../config/db");
 const { requireAuth } = require("../middleware/auth");
-const { sanitizeUser, isNonEmptyString } = require("../utils/helpers");
+const { sanitizeUser, isNonEmptyString, toId } = require("../utils/helpers");
 
 const router = express.Router();
 
@@ -18,6 +19,27 @@ router.get("/", requireAuth, (req, res) => {
     success: true,
     user: sanitizeUser(req.user),
   });
+});
+
+/** POST /api/v1/profile/apply-vendor - request to become a vendor (pending admin approval) */
+router.post("/apply-vendor", requireAuth, async (req, res, next) => {
+  try {
+    const db = getDB();
+    const userId = req.user.id || (req.user._id ? req.user._id.toHexString() : null);
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User not found." });
+    }
+    await db.collection("user").updateOne(
+      { _id: toId(userId) },
+      { $set: { role: "vendor", vendorApproved: false, updatedAt: new Date() } }
+    );
+    res.status(200).json({
+      success: true,
+      message: "Vendor application submitted successfully. Awaiting admin approval.",
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /** PATCH /api/v1/profile - update own profile (name and image only) */

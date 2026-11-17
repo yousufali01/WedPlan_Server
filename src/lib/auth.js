@@ -63,7 +63,11 @@ const initAuth = (db, client) => {
     baseURL: process.env.BETTER_AUTH_URL,
     secret: process.env.BETTER_AUTH_SECRET,
 
-    trustedOrigins: [process.env.FRONTEND_URL].filter(Boolean),
+    trustedOrigins: [
+      process.env.FRONTEND_URL,
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ].filter(Boolean),
 
     emailAndPassword: {
       enabled: true,
