@@ -28,7 +28,7 @@ const buildUri = () => {
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variable(s) in .env: ${missing.join(", ")}. ` +
-        "Please add them to your .env file and restart the server."
+        "Please add them to your .env file and restart the server.",
     );
   }
 
@@ -40,7 +40,7 @@ const buildUri = () => {
     if (value.includes("<")) {
       throw new Error(
         `${name} in .env is still a placeholder ("${value}"). ` +
-          "Replace it with your real MongoDB Atlas credentials."
+          "Replace it with your real MongoDB Atlas credentials.",
       );
     }
   }
@@ -104,7 +104,9 @@ const connectDB = async () => {
 /** Returns the connected database. Throws if connectDB() has not succeeded yet. */
 const getDB = () => {
   if (!db) {
-    throw new Error("Database is not connected! Make sure connectDB() ran successfully first.");
+    throw new Error(
+      "Database is not connected! Make sure connectDB() ran successfully first.",
+    );
   }
 
   return db;

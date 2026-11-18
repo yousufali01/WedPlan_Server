@@ -74,6 +74,7 @@ const startServer = async () => {
     app.use("/api/v1/services", require("./src/routes/services"));
     app.use("/api/v1/bookings", require("./src/routes/bookings"));
     app.use("/api/v1/admin", require("./src/routes/admin"));
+    app.use("/api/v1/subscription", require("./src/routes/subscription"));
 
     // 404 for unknown API routes
     app.use((req, res) => {
