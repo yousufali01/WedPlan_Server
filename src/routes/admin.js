@@ -231,4 +231,89 @@ router.delete("/users/:id", requireAdmin, async (req, res, next) => {
   }
 });
 
+/** GET /api/v1/admin/transactions - transactions and financial records */
+router.get("/transactions", requireAdmin, async (req, res, next) => {
+  try {
+    const db = getDB();
+
+    // 1. Fetch bookings
+    const bookings = await db
+      .collection("bookings")
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    // 2. Fetch vendor subscriptions
+    const vendorsWithSub = await db
+      .collection("user")
+      .find({
+        role: "vendor",
+        "subscription.plan": { $in: ["premium_monthly", "premium_yearly"] },
+      })
+      .toArray();
+
+    const transactions = [];
+
+    // Map bookings
+    for (const b of bookings) {
+      transactions.push({
+        id: b._id.toHexString(),
+        type: "booking",
+        title: b.serviceName || "Wedding Service Reservation",
+        customer: b.customerName || b.customerId || "Couple",
+        vendor: b.vendorId || "Vendor",
+        amount: typeof b.servicePrice === "number" ? b.servicePrice : Number(b.price) || 0,
+        currency: "BDT",
+        status: b.status || "pending",
+        date: b.createdAt || new Date(),
+        eventDate: b.eventDate,
+      });
+    }
+
+    // Map subscriptions
+    for (const v of vendorsWithSub) {
+      const isYearly = v.subscription?.plan === "premium_yearly";
+      transactions.push({
+        id: `sub-${v._id.toHexString()}`,
+        type: "subscription",
+        title: isYearly
+          ? "Vendor Premium Yearly Membership"
+          : "Vendor Premium Monthly Membership",
+        customer: v.name || v.email,
+        vendor: v.businessName || v.studioName || v.name,
+        amount: isYearly ? 290 : 29,
+        currency: "USD",
+        status: v.subscription?.status || "active",
+        date: v.subscription?.startedAt || v.subscription?.updatedAt || new Date(),
+      });
+    }
+
+    transactions.sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+
+    const totalBookingValue = bookings
+      .filter((b) => b.status === "accepted")
+      .reduce((acc, curr) => acc + (Number(curr.servicePrice) || 0), 0);
+
+    const totalSubRevenue = vendorsWithSub.reduce((acc, curr) => {
+      return acc + (curr.subscription?.plan === "premium_yearly" ? 290 : 29);
+    }, 0);
+
+    res.status(200).json({
+      success: true,
+      total: transactions.length,
+      transactions,
+      summary: {
+        totalBookingValue,
+        totalSubRevenue,
+        totalBookings: bookings.length,
+        activeSubscriptions: vendorsWithSub.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
