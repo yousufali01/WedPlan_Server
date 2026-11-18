@@ -72,6 +72,7 @@ const startServer = async () => {
     // Protected API routes
     app.use("/api/v1/profile", require("./src/routes/profile"));
     app.use("/api/v1/services", require("./src/routes/services"));
+    app.use("/services", require("./src/routes/services"));
     app.use("/api/v1/bookings", require("./src/routes/bookings"));
     app.use("/api/v1/admin", require("./src/routes/admin"));
     app.use("/api/v1/subscription", require("./src/routes/subscription"));

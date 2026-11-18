@@ -529,4 +529,55 @@ router.patch("/:id/review", requireAdmin, async (req, res, next) => {
   }
 });
 
+/**
+ * GET /api/v1/services/:id
+ * Retrieve details of a single service by ID.
+ */
+router.get("/:id", async (req, res, next) => {
+  try {
+    const db = getDB();
+    const service = await db.collection("services").findOne({
+      _id: toId(req.params.id),
+    });
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found.",
+      });
+    }
+
+    // Attach vendor details if available
+    let vendor = null;
+    if (service.vendorId) {
+      const vendorUser = await db.collection("user").findOne({
+        _id: toId(service.vendorId),
+      });
+
+      if (vendorUser) {
+        vendor = {
+          id: vendorUser._id ? vendorUser._id.toHexString() : vendorUser.id,
+          name: vendorUser.name,
+          email: vendorUser.email,
+          image: vendorUser.image || null,
+          businessName:
+            vendorUser.businessName || vendorUser.studioName || vendorUser.name,
+        };
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      service: {
+        ...service,
+        vendor,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports = router;
+
 module.exports = router;

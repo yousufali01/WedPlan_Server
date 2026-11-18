@@ -3,6 +3,8 @@
  * Better Auth already manages indexes for its own collections (user, session, account...);
  * here we add the application-level indexes for services and bookings.
  */
+
+
 const ensureIndexes = async (db) => {
   const created = [];
 
