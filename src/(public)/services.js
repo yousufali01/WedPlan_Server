@@ -128,7 +128,9 @@ const buildServiceData = (body, vendorId) => {
 
 /**
  * POST /api/v1/services
- * Approved vendor creates a new service.
+ * Free vendors can add maximum 3 active services.
+ * Premium vendors can add unlimited services.
+ * Every new service requires admin approval.
  */
 router.post("/", requireVendor, async (req, res, next) => {
   try {
@@ -142,10 +144,59 @@ router.post("/", requireVendor, async (req, res, next) => {
     }
 
     const db = getDB();
+
+    // Get authenticated vendor ID
+    const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
+
+    // Find vendor account
+    const vendor = await db.collection("user").findOne({
+      $or: [
+        { _id: toId(vendorIdStr) },
+        { _id: vendorIdStr },
+        { id: vendorIdStr },
+      ],
+    });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor account not found.",
+      });
+    }
+
+    // Check active Premium subscription
+    const subscription = vendor.subscription;
+
+    const isPremium =
+      ["premium_monthly", "premium_yearly"].includes(subscription?.plan) &&
+      subscription.status === "active" &&
+      subscription.expiresAt &&
+      new Date(subscription.expiresAt) > new Date();
+
+    // Free plan: maximum 3 active services
+    if (!isPremium) {
+      const activeServices = await db.collection("services").countDocuments({
+        $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
+        availability: true,
+      });
+
+      if (activeServices >= 3) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Free plan allows only 3 active services. Please upgrade to Premium to add more services.",
+          code: "SERVICE_LIMIT_REACHED",
+          activeServices,
+          plan: "free",
+        });
+      }
+    }
+
+    // Create service as pending
     const now = new Date();
 
     const serviceData = {
-      ...buildServiceData(req.body, req.user.id),
+      ...buildServiceData(req.body, vendorIdStr),
       createdAt: now,
       updatedAt: now,
     };
@@ -348,10 +399,7 @@ router.get("/mine", requireVendor, async (req, res, next) => {
     const services = await db
       .collection("services")
       .find({
-        $or: [
-          { vendorId: vendorIdStr },
-          { vendorId: toId(vendorIdStr) },
-        ],
+        $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
       })
       .sort({ createdAt: -1 })
       .toArray();
@@ -373,14 +421,9 @@ router.get("/mine", requireVendor, async (req, res, next) => {
 const loadOwnService = async (req, res) => {
   const db = getDB();
 
-  const service = await db
-    .collection("services")
-    .findOne({
-      $or: [
-        { _id: toId(req.params.id) },
-        { _id: req.params.id },
-      ],
-    });
+  const service = await db.collection("services").findOne({
+    $or: [{ _id: toId(req.params.id) }, { _id: req.params.id }],
+  });
 
   if (!service) {
     res.status(404).json({
@@ -529,10 +572,7 @@ router.patch("/:id/availability", requireVendor, async (req, res, next) => {
         const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
 
         const activeServices = await db.collection("services").countDocuments({
-          $or: [
-            { vendorId: vendorIdStr },
-            { vendorId: toId(vendorIdStr) },
-          ],
+          $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
           availability: true,
           _id: { $ne: service._id },
         });
@@ -673,10 +713,7 @@ router.get("/:id", async (req, res, next) => {
     const db = getDB();
 
     const service = await db.collection("services").findOne({
-      $or: [
-        { _id: toId(req.params.id) },
-        { _id: req.params.id },
-      ],
+      $or: [{ _id: toId(req.params.id) }, { _id: req.params.id }],
     });
 
     if (!service) {
@@ -701,11 +738,7 @@ router.get("/:id", async (req, res, next) => {
 
     if (vId) {
       const vendorUser = await db.collection("user").findOne({
-        $or: [
-          { _id: toId(vId) },
-          { id: vId },
-          { _id: vId },
-        ],
+        $or: [{ _id: toId(vId) }, { id: vId }, { _id: vId }],
       });
 
       if (vendorUser) {
@@ -728,12 +761,16 @@ router.get("/:id", async (req, res, next) => {
 
       if (defaultVendor) {
         vendor = {
-          id: defaultVendor._id ? defaultVendor._id.toString() : defaultVendor.id,
+          id: defaultVendor._id
+            ? defaultVendor._id.toString()
+            : defaultVendor.id,
           name: defaultVendor.name,
           email: defaultVendor.email,
           image: defaultVendor.image || null,
           businessName:
-            defaultVendor.businessName || defaultVendor.studioName || defaultVendor.name,
+            defaultVendor.businessName ||
+            defaultVendor.studioName ||
+            defaultVendor.name,
         };
       }
     }
