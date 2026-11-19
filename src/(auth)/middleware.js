@@ -73,7 +73,9 @@ const authenticateUser = async (req, res, next) => {
 
       // Load the CURRENT user record from the database (fresh role & approval state)
       const db = getDB();
-      const dbUser = await db.collection("user").findOne({ _id: toId(payload.sub) });
+      const dbUser = await db
+        .collection("user")
+        .findOne({ _id: toId(payload.sub) });
 
       if (dbUser) {
         // Normalise: always expose a string `id` field
@@ -119,18 +121,20 @@ const authenticateUser = async (req, res, next) => {
 };
 
 /** Builds a role-check middleware. Never trusts role data from the request. */
-const requireRole = (...roles) => (req, res, next) => {
-  const userRole = req.user?.role ?? "customer";
+const requireRole =
+  (...roles) =>
+  (req, res, next) => {
+    const userRole = req.user?.role ?? "customer";
 
-  if (!roles.includes(userRole)) {
-    return res.status(403).json({
-      success: false,
-      message: `Access denied. This action requires the ${roles.join(" or ")} role.`,
-    });
-  }
+    if (!roles.includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: `Access denied. This action requires the ${roles.join(" or ")} role.`,
+      });
+    }
 
-  next();
-};
+    next();
+  };
 
 /** Vendors must be approved by an admin before they can act as vendors. */
 const requireVendorApproved = (req, res, next) => {
@@ -147,8 +151,8 @@ const requireVendorApproved = (req, res, next) => {
 /** Authenticated user of any role. */
 const requireAuth = [authenticateUser];
 
-/** Customer-only routes (allows customer and admin). */
-const requireCustomer = [authenticateUser, requireRole("customer", "admin")];
+/** Customer-only routes. Admins and vendors cannot create customer bookings. */
+const requireCustomer = [authenticateUser, requireRole("customer")];
 
 /** Vendor-only routes (must be approved by an admin). */
 const requireVendor = [
