@@ -3,7 +3,7 @@
  * - Only APPROVED vendors can create/manage services.
  * - Vendors can only modify their OWN services.
  * - Admins can delete any service and review services.
- * - Public list only shows available services from approved vendors.
+ * - Public list only shows available services approved by admin.
  */
 
 const express = require("express");
@@ -98,6 +98,10 @@ const validateServiceBody = (body, { partial = false } = {}) => {
 /**
  * Prepare safe service data.
  * The vendor ID always comes from the authenticated session.
+ *
+ * IMPORTANT:
+ * Every newly created service starts as PENDING.
+ * Admin approval is required before public display.
  */
 const buildServiceData = (body, vendorId) => {
   const images = Array.isArray(body.images)
@@ -116,9 +120,9 @@ const buildServiceData = (body, vendorId) => {
     image: images[0] || "",
     images,
     availability: true,
-    // Approved vendors publish immediately. Admins can still reject a listing
-    // afterwards (PATCH /services/:id/review), which hides it again.
-    status: "approved",
+
+    // Admin must approve before this service becomes public.
+    status: "pending",
   };
 };
 
@@ -154,7 +158,7 @@ router.post("/", requireVendor, async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: "Service published successfully. It is now live on WedPlan.",
+      message: "Service submitted successfully. Waiting for admin approval.",
       service,
     });
   } catch (error) {
@@ -186,8 +190,7 @@ router.get("/", async (req, res, next) => {
       .project({ _id: 1, id: 1 })
       .toArray();
 
-    // Build a de-duplicated array of plain STRINGS — the services collection
-    // stores vendorId as a string (hex ObjectId or Better Auth id string).
+    // Build a de-duplicated array of plain STRINGS.
     const approvedVendorIds = [
       ...new Set(
         approvedVendors.flatMap((vendor) => {
@@ -197,26 +200,28 @@ router.get("/", async (req, res, next) => {
               : vendor._id
                 ? String(vendor._id)
                 : null;
+
           const idStr = vendor.id ? String(vendor.id) : null;
+
           return [hex, idStr].filter(Boolean);
         }),
       ),
     ];
 
+    // Only admin-approved and available services are public.
+    // Services without a status are NOT automatically approved.
     const query = {
       availability: true,
-      $or: [
-        { status: "approved" },
-        // Backward compatibility for older services.
-        { status: { $exists: false } },
-      ],
+      status: "approved",
     };
 
     if (approvedVendorIds.length > 0) {
       const approvedObjectIds = approvedVendorIds
         .filter((id) => /^[a-f\d]{24}$/i.test(id))
         .map(toId);
+
       query.$and = query.$and || [];
+
       query.$and.push({
         $or: [
           { vendorId: { $in: approvedVendorIds } },
@@ -234,14 +239,18 @@ router.get("/", async (req, res, next) => {
       req.query.category !== "all"
     ) {
       const cat = String(req.query.category).trim();
+
       query.category = { $regex: new RegExp(cat, "i") };
     }
 
     // Search query filter (matches name, title, description, or location)
     const search = req.query.search || req.query.q;
+
     if (search && String(search).trim()) {
       const sRegex = new RegExp(String(search).trim(), "i");
+
       query.$and = query.$and || [];
+
       query.$and.push({
         $or: [
           { name: { $regex: sRegex } },
@@ -265,6 +274,7 @@ router.get("/", async (req, res, next) => {
       query.price = query.price || {};
       query.price.$gte = Number(req.query.minPrice);
     }
+
     if (req.query.maxPrice !== undefined && req.query.maxPrice !== "") {
       query.price = query.price || {};
       query.price.$lte = Number(req.query.maxPrice);
@@ -272,6 +282,7 @@ router.get("/", async (req, res, next) => {
 
     // Sorting
     let sort = { createdAt: -1 };
+
     if (req.query.sort === "price-low" || req.query.sort === "price_asc") {
       sort = { price: 1 };
     } else if (
@@ -298,6 +309,7 @@ router.get("/", async (req, res, next) => {
           const v = await db.collection("user").findOne({
             $or: [{ _id: toId(s.vendorId) }, { id: s.vendorId }],
           });
+
           if (v) {
             s.vendor = {
               id: v.id || (v._id ? v._id.toString() : ""),
@@ -330,6 +342,7 @@ router.get("/", async (req, res, next) => {
 router.get("/mine", requireVendor, async (req, res, next) => {
   try {
     const db = getDB();
+
     const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
 
     const services = await db
@@ -379,7 +392,9 @@ const loadOwnService = async (req, res) => {
   }
 
   const isAdmin = req.user.role === "admin";
+
   const userIdStr = String(req.user.id ?? req.user._id ?? "");
+
   const isOwner = String(service.vendorId) === userIdStr;
 
   if (!isAdmin && !isOwner) {
@@ -494,6 +509,7 @@ router.patch("/:id/availability", requireVendor, async (req, res, next) => {
         message: "Send { availability: true } or { availability: false }.",
       });
     }
+
     if (req.body.availability === true) {
       const db = getDB();
 
@@ -511,8 +527,12 @@ router.patch("/:id/availability", requireVendor, async (req, res, next) => {
 
       if (!isPremium) {
         const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
+
         const activeServices = await db.collection("services").countDocuments({
-          $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
+          $or: [
+            { vendorId: vendorIdStr },
+            { vendorId: toId(vendorIdStr) },
+          ],
           availability: true,
           _id: { $ne: service._id },
         });
@@ -646,11 +666,12 @@ router.patch("/:id/review", requireAdmin, async (req, res, next) => {
 
 /**
  * GET /api/v1/services/:id
- * Retrieve details of a single service by ID.
+ * Retrieve details of a single approved and available service by ID.
  */
 router.get("/:id", async (req, res, next) => {
   try {
     const db = getDB();
+
     const service = await db.collection("services").findOne({
       $or: [
         { _id: toId(req.params.id) },
@@ -665,9 +686,19 @@ router.get("/:id", async (req, res, next) => {
       });
     }
 
+    // Pending, rejected, or unavailable services are not public.
+    if (service.status !== "approved" || service.availability !== true) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found.",
+      });
+    }
+
     // Attach vendor details if available
     let vendor = null;
+
     const vId = service.vendorId ? String(service.vendorId) : "";
+
     if (vId) {
       const vendorUser = await db.collection("user").findOne({
         $or: [
@@ -694,6 +725,7 @@ router.get("/:id", async (req, res, next) => {
         role: "vendor",
         vendorApproved: true,
       });
+
       if (defaultVendor) {
         vendor = {
           id: defaultVendor._id ? defaultVendor._id.toString() : defaultVendor.id,
