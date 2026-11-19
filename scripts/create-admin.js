@@ -13,7 +13,7 @@
 require("dotenv").config();
 
 const { connectDB, closeDB } = require("../src/config/db");
-const { initAuth } = require("../src/lib/auth");
+const { initAuth } = require("../src/(auth)/auth");
 const { isNonEmptyString } = require("../src/utils/helpers");
 
 const createAdmin = async () => {

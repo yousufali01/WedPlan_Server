@@ -8,7 +8,7 @@ const express = require("express");
 const Stripe = require("stripe");
 
 const { getDB } = require("../config/db");
-const { requireVendor } = require("../middleware/auth");
+const { requireVendor } = require("../(auth)/middleware");
 const { toId } = require("../utils/helpers");
 const {
   PREMIUM_PLANS,

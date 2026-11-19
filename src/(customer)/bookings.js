@@ -13,7 +13,7 @@ const {
   requireVendor,
   requireAdmin,
   authenticateUser,
-} = require("../middleware/auth");
+} = require("../(auth)/middleware");
 const { toId, isNonEmptyString } = require("../utils/helpers");
 
 const router = express.Router();

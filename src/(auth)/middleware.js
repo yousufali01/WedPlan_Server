@@ -15,7 +15,7 @@
 const { fromNodeHeaders } = require("better-auth/node");
 const { createRemoteJWKSet, jwtVerify } = require("jose");
 
-const { getAuth } = require("../lib/auth");
+const { getAuth } = require("./auth");
 const { getDB } = require("../config/db");
 const { sanitizeUser, toId } = require("../utils/helpers");
 

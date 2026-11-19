@@ -6,9 +6,9 @@
 const express = require("express");
 const { fromNodeHeaders } = require("better-auth/node");
 
-const { getAuth } = require("../lib/auth");
+const { getAuth } = require("../(auth)/auth");
 const { getDB } = require("../config/db");
-const { authenticateUser, requireAuth, requireRole } = require("../middleware/auth");
+const { authenticateUser, requireAuth, requireRole } = require("../(auth)/middleware");
 const { sanitizeUser, isNonEmptyString, toId } = require("../utils/helpers");
 
 const router = express.Router();

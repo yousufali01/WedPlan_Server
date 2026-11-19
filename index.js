@@ -6,7 +6,7 @@ const { toNodeHandler } = require("better-auth/node");
 
 const { connectDB, getDB, closeDB, getClient } = require("./src/config/db");
 const { ensureIndexes } = require("./src/config/indexes");
-const { initAuth } = require("./src/lib/auth");
+const { initAuth } = require("./src/(auth)/auth");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -70,13 +70,13 @@ const startServer = async () => {
     });
 
     // Protected API routes
-    app.use("/api/v1/profile", require("./src/routes/profile"));
-    app.use("/api/v1/services", require("./src/routes/services"));
-    app.use("/services", require("./src/routes/services"));
-    app.use("/api/v1/bookings", require("./src/routes/bookings"));
-    app.use("/api/v1/admin", require("./src/routes/admin"));
-    app.use("/api/v1/planner", require("./src/routes/planner"));
-    app.use("/api/v1/subscription", require("./src/routes/subscription"));
+    app.use("/api/v1/profile", require("./src/(customer)/profile"));
+    app.use("/api/v1/services", require("./src/(public)/services"));
+    app.use("/services", require("./src/(public)/services"));
+    app.use("/api/v1/bookings", require("./src/(customer)/bookings"));
+    app.use("/api/v1/admin", require("./src/(admin)/admin"));
+    app.use("/api/v1/planner", require("./src/(customer)/planner"));
+    app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
 
     // 404 for unknown API routes
     app.use((req, res) => {

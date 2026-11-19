@@ -13,7 +13,7 @@ const {
   requireVendor,
   authenticateUser,
   requireAdmin,
-} = require("../middleware/auth");
+} = require("../(auth)/middleware");
 
 const {
   toId,
