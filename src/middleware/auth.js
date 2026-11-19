@@ -45,6 +45,9 @@ const verifyBearerToken = async (token) => {
 /**
  * Authenticates the request.
  * Attaches the fresh DB user record to req.user on success, otherwise 401.
+ *
+ * Always ensures req.user has a normalised string `id` field regardless of
+ * whether the user came from a session cookie (Better Auth) or a JWT.
  */
 const authenticateUser = async (req, res, next) => {
   try {
@@ -70,14 +73,35 @@ const authenticateUser = async (req, res, next) => {
 
       // Load the CURRENT user record from the database (fresh role & approval state)
       const db = getDB();
-      user = await db.collection("user").findOne({ _id: toId(payload.sub) });
+      const dbUser = await db.collection("user").findOne({ _id: toId(payload.sub) });
+
+      if (dbUser) {
+        // Normalise: always expose a string `id` field
+        const id =
+          dbUser.id ??
+          (dbUser._id
+            ? typeof dbUser._id.toHexString === "function"
+              ? dbUser._id.toHexString()
+              : String(dbUser._id)
+            : payload.sub);
+        user = { ...dbUser, id };
+      }
     } else {
       // Session cookie path (preferred for same-origin requests)
       const session = await auth.api.getSession({
         headers: fromNodeHeaders(req.headers),
       });
 
-      user = session?.user ?? null;
+      if (session?.user) {
+        // Better Auth session user already has an `id` string.
+        // If role is missing (e.g., older Better Auth version), default to "customer".
+        const rawUser = session.user;
+        user = {
+          ...rawUser,
+          id: rawUser.id ?? rawUser._id ?? "",
+          role: rawUser.role ?? "customer",
+        };
+      }
     }
 
     if (!user) {
@@ -123,8 +147,8 @@ const requireVendorApproved = (req, res, next) => {
 /** Authenticated user of any role. */
 const requireAuth = [authenticateUser];
 
-/** Customer-only routes. */
-const requireCustomer = [authenticateUser, requireRole("customer")];
+/** Customer-only routes (allows customer and admin). */
+const requireCustomer = [authenticateUser, requireRole("customer", "admin")];
 
 /** Vendor-only routes (must be approved by an admin). */
 const requireVendor = [

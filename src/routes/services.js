@@ -162,14 +162,14 @@ router.post("/", requireVendor, async (req, res, next) => {
 
 /**
  * GET /api/v1/services
- * Public list of approved and available services.
+ * Public list of approved and available services with search, filtering, and sorting.
  */
 router.get("/", async (req, res, next) => {
   try {
     const db = getDB();
 
     const limit = Math.min(
-      Math.max(parseInt(req.query.limit, 10) || 20, 1),
+      Math.max(parseInt(req.query.limit, 10) || 50, 1),
       100,
     );
 
@@ -181,8 +181,25 @@ router.get("/", async (req, res, next) => {
         role: "vendor",
         vendorApproved: true,
       })
-      .project({ _id: 1 })
+      .project({ _id: 1, id: 1 })
       .toArray();
+
+    // Build a de-duplicated array of plain STRINGS — the services collection
+    // stores vendorId as a string (hex ObjectId or Better Auth id string).
+    const approvedVendorIds = [
+      ...new Set(
+        approvedVendors.flatMap((vendor) => {
+          const hex =
+            vendor._id && typeof vendor._id.toHexString === "function"
+              ? vendor._id.toHexString()
+              : vendor._id
+                ? String(vendor._id)
+                : null;
+          const idStr = vendor.id ? String(vendor.id) : null;
+          return [hex, idStr].filter(Boolean);
+        }),
+      ),
+    ];
 
     const query = {
       availability: true,
@@ -191,13 +208,66 @@ router.get("/", async (req, res, next) => {
         // Backward compatibility for older services.
         { status: { $exists: false } },
       ],
-      vendorId: {
-        $in: approvedVendors.map((vendor) => vendor._id.toHexString()),
-      },
     };
 
-    if (req.query.category) {
-      query.category = String(req.query.category).trim();
+    if (approvedVendorIds.length > 0) {
+      query.vendorId = {
+        $in: approvedVendorIds,
+      };
+    }
+
+    // Category filter
+    if (
+      req.query.category &&
+      req.query.category !== "All Categories" &&
+      req.query.category !== "all"
+    ) {
+      const cat = String(req.query.category).trim();
+      query.category = { $regex: new RegExp(cat, "i") };
+    }
+
+    // Search query filter (matches name, title, description, or location)
+    const search = req.query.search || req.query.q;
+    if (search && String(search).trim()) {
+      const sRegex = new RegExp(String(search).trim(), "i");
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { name: { $regex: sRegex } },
+          { title: { $regex: sRegex } },
+          { description: { $regex: sRegex } },
+          { location: { $regex: sRegex } },
+          { category: { $regex: sRegex } },
+        ],
+      });
+    }
+
+    // Location filter
+    if (req.query.location && String(req.query.location).trim()) {
+      query.location = {
+        $regex: new RegExp(String(req.query.location).trim(), "i"),
+      };
+    }
+
+    // Price range filters
+    if (req.query.minPrice !== undefined && req.query.minPrice !== "") {
+      query.price = query.price || {};
+      query.price.$gte = Number(req.query.minPrice);
+    }
+    if (req.query.maxPrice !== undefined && req.query.maxPrice !== "") {
+      query.price = query.price || {};
+      query.price.$lte = Number(req.query.maxPrice);
+    }
+
+    // Sorting
+    let sort = { createdAt: -1 };
+    if (req.query.sort === "price-low" || req.query.sort === "price_asc") {
+      sort = { price: 1 };
+    } else if (
+      req.query.sort === "price-high" ||
+      req.query.sort === "price_desc"
+    ) {
+      sort = { price: -1 };
     }
 
     const total = await db.collection("services").countDocuments(query);
@@ -205,10 +275,30 @@ router.get("/", async (req, res, next) => {
     const services = await db
       .collection("services")
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip((page - 1) * limit)
       .limit(limit)
       .toArray();
+
+    // Populate vendor info for each service if missing
+    for (const s of services) {
+      if (s.vendorId && !s.vendor) {
+        try {
+          const v = await db.collection("user").findOne({
+            $or: [{ _id: toId(s.vendorId) }, { id: s.vendorId }],
+          });
+          if (v) {
+            s.vendor = {
+              id: v.id || (v._id ? v._id.toString() : ""),
+              name: v.name,
+              email: v.email,
+              image: v.image || null,
+              businessName: v.businessName || v.studioName || v.name,
+            };
+          }
+        } catch {}
+      }
+    }
 
     return res.status(200).json({
       success: true,

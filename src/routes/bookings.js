@@ -52,39 +52,77 @@ router.post("/", requireCustomer, async (req, res, next) => {
 
     const db = getDB();
 
-    // The service must exist, be available and belong to an APPROVED vendor.
-    // vendorId is taken from the service itself - never from the request body.
+    // Find service by _id — accept both ObjectId and string IDs
     const service = await db
       .collection("services")
-      .findOne({ _id: toId(req.body.serviceId), availability: true });
+      .findOne({ _id: toId(req.body.serviceId) });
 
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: "Service not found or not available.",
+        message: "Service not found.",
       });
     }
 
+    if (service.availability === false) {
+      return res.status(400).json({
+        success: false,
+        message: "This service is currently unavailable for booking.",
+      });
+    }
+
+    // Vendor must exist and be an approved vendor.
+    // vendorId is stored as a string; support both string and ObjectId _id.
+    const vendorIdStr = String(service.vendorId ?? "");
     const vendor = await db.collection("user").findOne({
-      _id: toId(service.vendorId),
-      role: "vendor",
-      vendorApproved: true,
+      $or: [
+        { _id: toId(vendorIdStr) },
+        { id: vendorIdStr },
+      ],
     });
 
     if (!vendor) {
       return res.status(400).json({
         success: false,
-        message: "This service is currently not bookable.",
+        message: "The vendor for this service could not be found.",
+      });
+    }
+
+    if (vendor.role !== "vendor" && vendor.role !== "admin") {
+      return res.status(400).json({
+        success: false,
+        message: "This service does not belong to a registered vendor.",
+      });
+    }
+
+    if (vendor.vendorApproved !== true && vendor.role !== "admin") {
+      return res.status(400).json({
+        success: false,
+        message: "This vendor has not been approved yet. Please try another service.",
+      });
+    }
+
+    // Normalise customerId — req.user.id is always a string after the middleware fix
+    const customerId = req.user.id ?? req.user._id?.toString() ?? "";
+
+    if (!customerId) {
+      return res.status(401).json({
+        success: false,
+        message: "Could not identify your account. Please sign in again.",
       });
     }
 
     const now = new Date();
     const result = await db.collection("bookings").insertOne({
-      customerId: req.user.id,
-      vendorId: service.vendorId,
-      serviceId: service._id.toHexString(),
+      customerId,
+      vendorId: vendorIdStr,
+      serviceId: service._id.toHexString
+        ? service._id.toHexString()
+        : String(service._id),
       serviceName: service.name,
       servicePrice: service.price,
+      serviceImage: service.image || (service.images && service.images[0]) || null,
+      serviceCategory: service.category || null,
       eventDate: req.body.eventDate.trim(),
       guestCount: req.body.guestCount ?? null,
       notes: typeof req.body.notes === "string" ? req.body.notes.trim() : "",
@@ -134,15 +172,38 @@ const loadParticipantBooking = async (req, res) => {
   return booking;
 };
 
-/** GET /api/v1/bookings/mine - customer's own bookings */
+/** GET /api/v1/bookings/mine - customer's own bookings with optional status filter */
 router.get("/mine", requireCustomer, async (req, res, next) => {
   try {
     const db = getDB();
+
+    const query = { customerId: req.user.id };
+
+    // Optional status filter: ?status=pending|accepted|rejected|cancelled
+    if (req.query.status && BOOKING_STATUSES.includes(req.query.status)) {
+      query.status = req.query.status;
+    }
+
     const bookings = await db
       .collection("bookings")
-      .find({ customerId: req.user.id })
+      .find(query)
       .sort({ createdAt: -1 })
       .toArray();
+
+    // Enrich each booking with service image if not stored
+    for (const booking of bookings) {
+      if (!booking.serviceImage && booking.serviceId) {
+        try {
+          const service = await db
+            .collection("services")
+            .findOne({ _id: toId(booking.serviceId) }, { projection: { image: 1, images: 1, category: 1 } });
+          if (service) {
+            booking.serviceImage = service.image || (service.images && service.images[0]) || null;
+            booking.serviceCategory = service.category || null;
+          }
+        } catch {}
+      }
+    }
 
     res.status(200).json({ success: true, total: bookings.length, bookings });
   } catch (error) {
