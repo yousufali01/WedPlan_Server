@@ -2,120 +2,152 @@ const { MongoClient, ServerApiVersion } = require("mongodb");
 
 let client = null;
 let db = null;
+let connectionPromise = null;
 
 /**
- * Builds the MongoDB connection string from environment variables.
- *
- * Supports the Atlas template format:
- *   DB_URI=mongodb+srv://<db_username>:<db_password>@cluster0.xxxxx.mongodb.net/...
- * The <db_username> and <db_password> placeholders are filled automatically
- * from DB_USER and DB_PASSWORD (the password is URL-encoded so special
- * characters like @ : / # ? work safely).
- *
- * A full URI with credentials already embedded is also supported and used as-is.
+ * Builds MongoDB Atlas URI using environment variables.
  */
 const buildUri = () => {
   const dbUser = process.env.DB_USER;
   const dbPassword = process.env.DB_PASSWORD;
   const dbUri = process.env.DB_URI;
 
-  // 1. Make sure the required variables exist
   const missing = [];
+
   if (!dbUri) missing.push("DB_URI");
   if (!dbUser) missing.push("DB_USER");
   if (!dbPassword) missing.push("DB_PASSWORD");
 
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variable(s) in .env: ${missing.join(", ")}. ` +
-        "Please add them to your .env file and restart the server.",
+      `Missing required environment variables: ${missing.join(", ")}`,
     );
   }
 
-  // 2. Detect unfilled placeholder values in the credentials (e.g. "<your-atlas-username>")
   for (const [name, value] of [
     ["DB_USER", dbUser],
     ["DB_PASSWORD", dbPassword],
   ]) {
     if (value.includes("<")) {
-      throw new Error(
-        `${name} in .env is still a placeholder ("${value}"). ` +
-          "Replace it with your real MongoDB Atlas credentials.",
-      );
+      throw new Error(`${name} still contains a placeholder value.`);
     }
   }
 
   let uri = dbUri;
 
   if (uri.includes("<db_username>") || uri.includes("<db_password>")) {
-    // Atlas template: fill in the placeholders from DB_USER / DB_PASSWORD
     uri = uri
       .replace("<db_username>", encodeURIComponent(dbUser))
       .replace("<db_password>", encodeURIComponent(dbPassword));
   } else if (!uri.includes("@")) {
-    // URI has no credentials embedded: build them from DB_USER / DB_PASSWORD
-    const scheme = uri.startsWith("mongodb+srv://")
-      ? "mongodb+srv://"
-      : uri.startsWith("mongodb://")
-        ? "mongodb://"
-        : "mongodb+srv://";
+    const scheme = uri.startsWith("mongodb://")
+      ? "mongodb://"
+      : "mongodb+srv://";
+
     const rest = uri.startsWith(scheme) ? uri.slice(scheme.length) : uri;
-    uri = `${scheme}${encodeURIComponent(dbUser)}:${encodeURIComponent(dbPassword)}@${rest}`;
+
+    uri = `${scheme}${encodeURIComponent(dbUser)}:${encodeURIComponent(
+      dbPassword,
+    )}@${rest}`;
   }
-  // Otherwise the URI already contains credentials and is used as-is.
 
   return uri;
 };
 
 /**
- * Connects to MongoDB Atlas and verifies the connection with a real ping command.
- * Throws (and therefore prevents the Express server from starting) on failure.
+ * Reuses one MongoDB connection per serverless instance.
  */
 const connectDB = async () => {
-  const uri = buildUri();
+  if (db && client) {
+    return db;
+  }
 
-  client = new MongoClient(uri, {
-    serverApi: {
-      version: ServerApiVersion.v1,
-      strict: true,
-      deprecationErrors: true,
-    },
-    // Fail fast with a meaningful error if the cluster cannot be reached
-    serverSelectionTimeoutMS: 10000,
-  });
+  if (connectionPromise) {
+    return connectionPromise;
+  }
+
+  connectionPromise = (async () => {
+    const uri = buildUri();
+
+    const newClient = new MongoClient(uri, {
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      },
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+      maxPoolSize: 10,
+      minPoolSize: 0,
+    });
+
+    try {
+      await newClient.connect();
+
+      const database = newClient.db(process.env.DB_NAME || "WedPlan");
+
+      await database.command({ ping: 1 });
+
+      client = newClient;
+      db = database;
+
+      console.log("MongoDB Connected Successfully!");
+
+      return db;
+    } catch (error) {
+      console.error("MongoDB Connection Failed:", error.message);
+
+      await newClient.close().catch(() => {});
+
+      client = null;
+      db = null;
+
+      throw error;
+    }
+  })();
 
   try {
-    await client.connect();
-
-    db = client.db(process.env.DB_NAME || "WedPlan");
-
-    // Real connectivity check - not a fake success message
-    await db.command({ ping: 1 });
-
-    console.log("MongoDB Connected Successfully!");
-
-    return db;
-  } catch (error) {
-    console.error("❌ MongoDB Connection Failed:", error.message);
-    throw error;
+    return await connectionPromise;
+  } finally {
+    connectionPromise = null;
   }
 };
 
-/** Returns the connected database. Throws if connectDB() has not succeeded yet. */
+/**
+ * Returns the connected database.
+ */
 const getDB = () => {
   if (!db) {
-    throw new Error(
-      "Database is not connected! Make sure connectDB() ran successfully first.",
-    );
+    throw new Error("Database is not connected. Call connectDB() first.");
   }
 
   return db;
 };
 
-/** Closes the MongoDB connection gracefully. */
+/**
+ * Returns the existing MongoDB client.
+ */
+const getClient = () => {
+  if (!client) {
+    throw new Error("MongoDB client is not initialized.");
+  }
+
+  return client;
+};
+
+/**
+ * Graceful shutdown for local development.
+ */
 const closeDB = async () => {
   if (client) {
-    await client.close();
+    const currentClient = client;
+
+    client = null;
+    db = null;
+    connectionPromise = null;
+
+    await currentClient.close();
+
     console.log("MongoDB connection closed.");
   }
 };
@@ -123,7 +155,7 @@ const closeDB = async () => {
 module.exports = {
   connectDB,
   getDB,
+  getClient,
   closeDB,
-  getClient: () => client,
   buildUri,
 };

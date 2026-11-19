@@ -4,14 +4,19 @@ const express = require("express");
 const cors = require("cors");
 const { toNodeHandler } = require("better-auth/node");
 
-const { connectDB, getDB, closeDB, getClient } = require("./src/config/db");
+const { connectDB, getDB, getClient } = require("./src/config/db");
+
 const { ensureIndexes } = require("./src/config/indexes");
-const { initAuth } = require("./src/(auth)/auth");
+
+const { initAuth, getAuth } = require("./src/(auth)/auth");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware - CORS with credentials for the frontend origin
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
+
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   "http://localhost:3000",
@@ -21,7 +26,6 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests without an Origin header (e.g. server-to-server)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -31,111 +35,212 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
 
-// Start Server - MongoDB MUST connect successfully before Express starts
-const startServer = async () => {
-  try {
-    const db = await connectDB();
+// ==========================================
+// ROOT & HEALTH ROUTES
+// These do not require MongoDB.
+// ==========================================
 
-    // Better Auth on the existing MongoDB connection
-    const auth = initAuth(db, getClient());
+app.get("/", (req, res) => {
+  res.status(200).send("Welcome to WedPlan Server!");
+});
 
-    // Better Auth handler MUST be mounted before express.json() - it parses its own body
-    app.all("/api/auth/*splat", toNodeHandler(auth));
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "WedPlan Server is Running!",
+  });
+});
 
-    // Body parsing for the API routes
-    app.use(express.json());
+// ==========================================
+// SERVER INITIALIZATION
+// One initialization per serverless instance.
+// ==========================================
 
-    // Database indexes (services, bookings, session TTL)
-    await ensureIndexes(db);
+let initializationPromise = null;
+let initialized = false;
 
-    // Root API
-    app.get("/", (req, res) => {
-      res.send("Welcome to WedPlan Server!");
-    });
-
-    // Server Health
-    app.get("/health", (req, res) => {
-      res.status(200).json({
-        success: true,
-        message: "WedPlan Server is Running!",
-      });
-    });
-
-    // MongoDB Test
-    app.get("/test-db", async (req, res) => {
-      try {
-        const database = getDB();
-
-        await database.command({ ping: 1 });
-
-        res.status(200).json({
-          success: true,
-          message: "MongoDB Connected Successfully!",
-          database: database.databaseName,
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: error.message,
-        });
-      }
-    });
-
-    // Protected API routes
-    app.use("/api/v1/profile", require("./src/(customer)/profile"));
-    app.use("/api/v1/services", require("./src/(public)/services"));
-    app.use("/services", require("./src/(public)/services"));
-    app.use("/api/v1/bookings", require("./src/(customer)/bookings"));
-    app.use("/api/v1/admin", require("./src/(admin)/admin"));
-    app.use("/api/v1/planner", require("./src/(customer)/planner"));
-    app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
-
-    // 404 for unknown API routes
-    app.use((req, res) => {
-      res.status(404).json({
-        success: false,
-        message: `Route not found: ${req.method} ${req.originalUrl}`,
-      });
-    });
-
-    // Central error handler - safe error responses (no stack leaks)
-    app.use((error, req, res, next) => {
-      console.error("❌ API Error:", error.message);
-
-      const status =
-        typeof error?.status === "number"
-          ? error.status
-          : typeof error?.statusCode === "number"
-            ? error.statusCode
-            : 500;
-
-      res.status(status).json({
-        success: false,
-        message: error.message || "Internal server error.",
-      });
-    });
-
-    app.listen(PORT, () => {
-      console.log(`WedPlan Server running on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error("❌ Server Startup Failed:", error.message);
-    process.exit(1);
+const initializeApp = async () => {
+  if (initialized) {
+    return;
   }
+
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      console.log("Initializing WedPlan Server...");
+
+      // MongoDB connection
+      const db = await connectDB();
+
+      // Better Auth initialization
+      initAuth(db, getClient());
+
+      // Required database indexes
+      await ensureIndexes(db);
+
+      initialized = true;
+
+      console.log("WedPlan Server initialized successfully.");
+    })().catch((error) => {
+      console.error("WedPlan Initialization Failed:", error);
+
+      initialized = false;
+      initializationPromise = null;
+
+      throw error;
+    });
+  }
+
+  return initializationPromise;
 };
 
-// Graceful Shutdown
-process.on("SIGINT", async () => {
-  await closeDB();
-  process.exit(0);
+// ==========================================
+// INITIALIZATION MIDDLEWARE
+// Runs before protected/API routes.
+// ==========================================
+
+app.use(async (req, res, next) => {
+  try {
+    await initializeApp();
+    next();
+  } catch (error) {
+    console.error("Request Initialization Error:", error.message);
+
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: "Server initialization failed.",
+      });
+    }
+  }
 });
 
-process.on("SIGTERM", async () => {
-  await closeDB();
-  process.exit(0);
+// ==========================================
+// BETTER AUTH
+// MUST remain before express.json()
+// ==========================================
+
+app.all("/api/auth/{*splat}", (req, res, next) => {
+  try {
+    const authHandler = toNodeHandler(getAuth());
+
+    return authHandler(req, res, next);
+  } catch (error) {
+    return next(error);
+  }
 });
 
-startServer();
+// ==========================================
+// BODY PARSER
+// ==========================================
+
+app.use(express.json());
+
+// ==========================================
+// MONGODB TEST
+// ==========================================
+
+app.get("/test-db", async (req, res, next) => {
+  try {
+    const database = getDB();
+
+    await database.command({ ping: 1 });
+
+    res.status(200).json({
+      success: true,
+      message: "MongoDB Connected Successfully!",
+      database: database.databaseName,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==========================================
+// EXISTING API ROUTES
+// ==========================================
+
+app.use("/api/v1/profile", require("./src/(customer)/profile"));
+
+app.use("/api/v1/services", require("./src/(public)/services"));
+
+app.use("/services", require("./src/(public)/services"));
+
+app.use("/api/v1/bookings", require("./src/(customer)/bookings"));
+
+app.use("/api/v1/admin", require("./src/(admin)/admin"));
+
+app.use("/api/v1/planner", require("./src/(customer)/planner"));
+
+app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
+
+// ==========================================
+// 404 HANDLER
+// ==========================================
+
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
+
+// ==========================================
+// CENTRAL ERROR HANDLER
+// ==========================================
+
+app.use((error, req, res, next) => {
+  console.error("WedPlan API Error:", error);
+
+  if (res.headersSent) {
+    return next(error);
+  }
+
+  const status =
+    typeof error?.status === "number"
+      ? error.status
+      : typeof error?.statusCode === "number"
+        ? error.statusCode
+        : 500;
+
+  res.status(status).json({
+    success: false,
+    message: error.message || "Internal server error.",
+  });
+});
+
+// ==========================================
+// LOCAL DEVELOPMENT ONLY
+// Vercel uses the exported Express app.
+// ==========================================
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`WedPlan Server running on port ${PORT}`);
+  });
+
+  const shutdown = async () => {
+    console.log("Shutting down WedPlan Server...");
+
+    const { closeDB } = require("./src/config/db");
+
+    try {
+      await closeDB();
+      process.exit(0);
+    } catch (error) {
+      console.error("Shutdown Error:", error);
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+// ==========================================
+// VERCEL SERVERLESS EXPORT
+// ==========================================
+
+module.exports = app;
