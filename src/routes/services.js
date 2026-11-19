@@ -116,7 +116,9 @@ const buildServiceData = (body, vendorId) => {
     image: images[0] || "",
     images,
     availability: true,
-    status: "pending",
+    // Approved vendors publish immediately. Admins can still reject a listing
+    // afterwards (PATCH /services/:id/review), which hides it again.
+    status: "approved",
   };
 };
 
@@ -152,7 +154,7 @@ router.post("/", requireVendor, async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: "Service submitted for admin review.",
+      message: "Service published successfully. It is now live on WedPlan.",
       service,
     });
   } catch (error) {
@@ -508,8 +510,9 @@ router.patch("/:id/availability", requireVendor, async (req, res, next) => {
         new Date(subscription.expiresAt) > new Date();
 
       if (!isPremium) {
+        const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
         const activeServices = await db.collection("services").countDocuments({
-          vendorId: req.user.id,
+          $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
           availability: true,
           _id: { $ne: service._id },
         });
@@ -714,7 +717,5 @@ router.get("/:id", async (req, res, next) => {
     next(error);
   }
 });
-
-module.exports = router;
 
 module.exports = router;

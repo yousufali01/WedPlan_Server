@@ -82,6 +82,20 @@ const buildSubscriptionResponse = (subscription, activeServices) => {
   };
 };
 
+/** Public shape for stored cards — only these keys ever leave the server. */
+const sanitizeCards = (cards) =>
+  Array.isArray(cards)
+    ? cards
+        .filter((card) => card && typeof card.id === "string")
+        .map((card) => ({
+          id: card.id,
+          brand: card.brand || "card",
+          last4: card.last4 || "",
+          expMonth: card.expMonth || null,
+          expYear: card.expYear || null,
+        }))
+    : [];
+
 // GET /api/v1/subscription/plans
 router.get("/plans", (req, res) => {
   res.json({ success: true, plans: PLANS });
@@ -112,6 +126,7 @@ router.get("/mine", requireVendor, async (req, res, next) => {
         vendor.subscription || { plan: "free", status: "active" },
         activeServices,
       ),
+      paymentMethods: sanitizeCards(vendor.paymentMethods),
       plans: PLANS,
     });
   } catch (error) {
@@ -143,8 +158,9 @@ router.post(
         process.env.FRONTEND_URL || "http://localhost:3000";
       const vendorId = resolveVendorId(req.user);
 
+      // NOTE: do NOT send `payment_method_types` — Stripe now manages payment
+      // methods from the Dashboard and rejects that parameter with a 400.
       const session = await stripeInstance.checkout.sessions.create({
-        payment_method_types: ["card"],
         line_items: [
           {
             price_data: {
@@ -175,6 +191,43 @@ router.post(
     }
   },
 );
+
+/**
+ * Builds the Premium subscription document stored on the vendor's user record.
+ * Both the Stripe Checkout flow and the in-app card flow use this so the
+ * stored shape (and expiry math) can never drift apart.
+ */
+const buildSubscriptionDoc = (plan, payment = {}) => {
+  const now = new Date();
+  const expiresAt = new Date(now);
+
+  if (plan === "premium_yearly") {
+    expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+  } else {
+    expiresAt.setMonth(expiresAt.getMonth() + 1);
+  }
+
+  return {
+    plan,
+    status: "active",
+    startedAt: now,
+    expiresAt,
+    paymentStatus: "paid",
+    ...(payment.stripeSessionId ? { stripeSessionId: payment.stripeSessionId } : {}),
+    ...(payment.paymentIntentId ? { paymentIntentId: payment.paymentIntentId } : {}),
+    amountPaid:
+      typeof payment.amountPaid === "number"
+        ? payment.amountPaid
+        : PLANS[plan].price,
+    updatedAt: now,
+  };
+};
+
+/** Loads the vendor's user document (or null). */
+const findVendorDoc = async (db, vendorId) =>
+  db
+    .collection("user")
+    .findOne({ $or: [{ _id: toId(vendorId) }, { id: vendorId }] });
 
 /**
  * Shared activation used by both /verify-stripe-session and /upgrade.
@@ -238,25 +291,12 @@ const activatePremium = async (req, res) => {
     : "premium_monthly";
 
   const db = getDB();
-  const now = new Date();
-  const expiresAt = new Date(now);
-
-  if (plan === "premium_yearly") {
-    expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-  } else {
-    expiresAt.setMonth(expiresAt.getMonth() + 1);
-  }
-
-  const subscription = {
-    plan,
-    status: "active",
-    startedAt: now,
-    expiresAt,
-    paymentStatus: "paid",
+  const subscription = buildSubscriptionDoc(plan, {
     stripeSessionId: session.id,
-    amountPaid: session.amount_total ? session.amount_total / 100 : PLANS[plan].price,
-    updatedAt: now,
-  };
+    amountPaid: session.amount_total
+      ? session.amount_total / 100
+      : PLANS[plan].price,
+  });
 
   const result = await db.collection("user").updateOne(
     { $or: [{ _id: toId(vendorId) }, { id: vendorId }] },
@@ -279,6 +319,247 @@ const activatePremium = async (req, res) => {
     ),
   });
 };
+
+/**
+ * GET /api/v1/subscription/payment-methods
+ * Cards the vendor saved during checkout (used by the payment page).
+ */
+router.get("/payment-methods", requireVendor, async (req, res, next) => {
+  try {
+    const db = getDB();
+    const vendorId = resolveVendorId(req.user);
+    const vendor = await findVendorDoc(db, vendorId);
+
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found." });
+    }
+
+    res.json({
+      success: true,
+      paymentMethods: sanitizeCards(vendor.paymentMethods),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/v1/subscription/pay
+ * In-app card payment: the browser tokenises the card with Stripe.js and the
+ * server confirms a PaymentIntent with that PaymentMethod. Premium is only
+ * granted once Stripe reports the intent as `succeeded`.
+ *
+ * Body: { paymentMethodId, planId?, saveCard?, useSavedCard? }
+ */
+router.post("/pay", requireVendor, async (req, res, next) => {
+  try {
+    const stripeInstance = getStripe();
+    if (!stripeInstance) {
+      return res.status(503).json({
+        success: false,
+        message: "Stripe secret key is not configured on the server.",
+      });
+    }
+
+    const body = req.body || {};
+    const requestedPlan = body.planId || body.plan;
+    const plan = PREMIUM_PLANS.includes(requestedPlan)
+      ? requestedPlan
+      : "premium_monthly";
+    const planInfo = PLANS[plan];
+
+    const vendorId = resolveVendorId(req.user);
+    if (!vendorId) {
+      return res.status(401).json({
+        success: false,
+        message: "Could not identify your account. Please sign in again.",
+      });
+    }
+
+    const db = getDB();
+    const vendor = await findVendorDoc(db, vendorId);
+
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found." });
+    }
+
+    const savedCards = sanitizeCards(vendor.paymentMethods);
+    const useSavedCard = body.useSavedCard === true;
+    const saveCard = body.saveCard === true && !useSavedCard;
+    const paymentMethodId =
+      typeof body.paymentMethodId === "string" ? body.paymentMethodId.trim() : "";
+
+    if (useSavedCard) {
+      if (!savedCards.some((card) => card.id === paymentMethodId)) {
+        return res.status(400).json({
+          success: false,
+          message: "That saved card was not found. Please add a new card.",
+        });
+      }
+    } else if (!/^pm_[A-Za-z0-9_]+$/.test(paymentMethodId)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid card is required. Please enter your card details.",
+      });
+    }
+
+    // Saved cards must live on a Stripe Customer before they can be re-used.
+    // The customer is created once and remembered on the vendor's user record.
+    let customerId = vendor.stripeCustomerId || null;
+
+    if (!customerId) {
+      try {
+        const customer = await stripeInstance.customers.create({
+          ...(req.user.email ? { email: req.user.email } : {}),
+          ...(req.user.name ? { name: req.user.name } : {}),
+          metadata: { vendorId: String(vendorId) },
+        });
+        customerId = customer.id;
+        await db.collection("user").updateOne(
+          { $or: [{ _id: toId(vendorId) }, { id: vendorId }] },
+          { $set: { stripeCustomerId: customerId } },
+        );
+      } catch (error) {
+        if (useSavedCard) {
+          return res.status(402).json({
+            success: false,
+            message:
+              error?.message ||
+              "We could not set up your saved card. Please add a new card.",
+          });
+        }
+        // A first-time card payment still works without a customer — we just
+        // cannot remember the card for next time.
+      }
+    }
+
+    // Only promise to save the card when we actually have somewhere to store
+    // it in Stripe, otherwise re-use would fail later.
+    const willSaveCard = saveCard && Boolean(customerId);
+
+    if (useSavedCard && customerId) {
+      try {
+        await stripeInstance.paymentMethods.attach(paymentMethodId, {
+          customer: customerId,
+        });
+      } catch (error) {
+        // Already attached to this customer — that is the normal case.
+        if (!/already attached/i.test(error?.message || "")) {
+          return res.status(402).json({
+            success: false,
+            message: error?.message || "That saved card could not be used.",
+          });
+        }
+      }
+    }
+
+    let intent;
+    try {
+      intent = await stripeInstance.paymentIntents.create({
+        amount: planInfo.price * 100,
+        currency: "usd",
+        payment_method: paymentMethodId,
+        confirm: true,
+        ...(customerId ? { customer: customerId } : {}),
+        // We only ever confirm card payments in-page, so redirects are
+        // disabled (and no return_url is required).
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        // Stripe forbids `off_session: true` together with
+        // `setup_future_usage` — saving a card must be an on-session confirm.
+        ...(willSaveCard
+          ? { setup_future_usage: "off_session" }
+          : { off_session: true }),
+        description: `WedPlan ${planInfo.name}`,
+        ...(req.user.email ? { receipt_email: req.user.email } : {}),
+        metadata: { vendorId, planId: plan },
+      });
+    } catch (error) {
+      // Card problems (declined, expired, insufficient funds...) are expected
+      // user-facing outcomes, not server errors.
+      if (
+        error?.type === "StripeCardError" ||
+        error?.type === "StripeInvalidRequestError"
+      ) {
+        return res.status(402).json({
+          success: false,
+          message: error.message || "Your card could not be processed.",
+          code: error.code || error.type,
+        });
+      }
+      throw error;
+    }
+
+    if (intent.status !== "succeeded") {
+      return res.status(402).json({
+        success: false,
+        code: intent.status,
+        message:
+          intent.status === "requires_action"
+            ? "This card needs extra authentication. Please try a different card."
+            : `Payment could not be completed (status: ${intent.status}).`,
+      });
+    }
+
+    const update = {
+      $set: {
+        subscription: buildSubscriptionDoc(plan, {
+          paymentIntentId: intent.id,
+          amountPaid: intent.amount / 100,
+        }),
+        updatedAt: new Date(),
+      },
+    };
+
+    if (willSaveCard) {
+      try {
+        const pm = await stripeInstance.paymentMethods.retrieve(paymentMethodId);
+        const card = pm.card || {};
+        const entry = {
+          id: pm.id,
+          brand: card.brand || "card",
+          last4: card.last4 || "",
+          expMonth: card.exp_month || null,
+          expYear: card.exp_year || null,
+          createdAt: new Date(),
+        };
+        // Keep at most 4 cards, newest first, no duplicates.
+        update.$set.paymentMethods = [
+          entry,
+          ...savedCards.filter((card) => card.id !== entry.id),
+        ].slice(0, 4);
+      } catch {
+        // Saving the card is a convenience — never fail the payment over it.
+      }
+    }
+
+    const result = await db.collection("user").updateOne(
+      { $or: [{ _id: toId(vendorId) }, { id: vendorId }] },
+      update,
+    );
+
+    if (!result.matchedCount) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found.",
+      });
+    }
+
+    const subscription = update.$set.subscription;
+
+    res.json({
+      success: true,
+      message: "Payment successful! Your Premium plan is now active.",
+      paymentIntentId: intent.id,
+      subscription: buildSubscriptionResponse(
+        subscription,
+        await getActiveServiceCount(db, vendorId),
+      ),
+      paymentMethods: sanitizeCards(update.$set.paymentMethods || savedCards),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // POST /api/v1/subscription/verify-stripe-session
 router.post("/verify-stripe-session", requireVendor, (req, res, next) => {
