@@ -77,10 +77,13 @@ router.post("/", requireCustomer, async (req, res, next) => {
       });
     }
 
-    // Vendor resolution: support string and ObjectId _id with fallback to active approved vendor
+// Vendor resolution: ensure the service has a valid vendor association.
+    // Use the vendorId stored on the service; if missing, and the requester is a vendor, assign that vendor.
+    // Do not fall back to any approved vendor, as that misroutes bookings.
     let vendorIdStr = String(service.vendorId ?? "").trim();
     let vendor = null;
 
+    // Try to find vendor by the ID present on the service.
     if (vendorIdStr && vendorIdStr !== "null" && vendorIdStr !== "undefined") {
       vendor = await db.collection("user").findOne({
         $or: [
@@ -91,13 +94,20 @@ router.post("/", requireCustomer, async (req, res, next) => {
       });
     }
 
-    if (!vendor || (vendor.vendorApproved !== true && vendor.role !== "admin")) {
+    // If the service lacks a vendor and the requester is a vendor, treat the requester as the owner.
+    if (!vendor && req.user && req.user.role === "vendor") {
       vendor = await db.collection("user").findOne({
-        role: "vendor",
-        vendorApproved: true,
+        $or: [
+          { _id: toId(req.user.id) },
+          { id: req.user.id },
+          { _id: req.user.id },
+        ],
       });
       if (vendor) {
-        vendorIdStr = vendor.id || (vendor._id ? vendor._id.toString() : "");
+        vendorIdStr = vendor.id || (vendor._id && typeof vendor._id.toHexString === "function"
+          ? vendor._id.toHexString()
+          : String(vendor._id));
+        // Persist resolved vendorId back to the service for future bookings.
         await db.collection("services").updateOne(
           { _id: service._id },
           { $set: { vendorId: vendorIdStr } }
@@ -105,10 +115,11 @@ router.post("/", requireCustomer, async (req, res, next) => {
       }
     }
 
+    // If still no vendor, return an error – the booking cannot be linked.
     if (!vendor) {
       return res.status(400).json({
         success: false,
-        message: "The vendor for this service could not be found.",
+        message: "The vendor for this service could not be found. Please ensure the service has a valid vendor.",
       });
     }
 
