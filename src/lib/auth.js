@@ -89,6 +89,16 @@ const initAuth = (db, client) => {
           defaultValue: false,
           input: false,
         },
+
+        // Vendor business profile. `input: false` means these can only be
+        // written by the server (PATCH /api/v1/profile/vendor) — never by a
+        // client through signup or Better Auth's updateUser endpoint.
+        businessName: { type: "string", required: false, input: false },
+        studioName: { type: "string", required: false, input: false },
+        phone: { type: "string", required: false, input: false },
+        location: { type: "string", required: false, input: false },
+        bio: { type: "string", required: false, input: false },
+        website: { type: "string", required: false, input: false },
       },
     },
 

@@ -152,4 +152,44 @@ router.post("/upgrade", requireVendor, async (req, res, next) => {
   }
 });
 
+// POST /api/v1/subscription/downgrade - return to the Free plan (demo, no payment).
+router.post("/downgrade", requireVendor, async (req, res, next) => {
+  try {
+    const db = getDB();
+    const subscription = {
+      plan: "free",
+      status: "active",
+      startedAt: new Date(),
+      paymentStatus: "demo",
+      updatedAt: new Date(),
+    };
+
+    const result = await db.collection("user").updateOne(
+      { _id: toId(req.user.id) },
+      { $set: { subscription } },
+    );
+
+    if (!result.matchedCount) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found.",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Switched to the Free plan.",
+      subscription: {
+        ...subscription,
+        planName: PLANS.free.name,
+        price: PLANS.free.price,
+        interval: PLANS.free.interval,
+        activeServiceLimit: PLANS.free.activeServiceLimit,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

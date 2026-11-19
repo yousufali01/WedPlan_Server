@@ -8,10 +8,34 @@ const { fromNodeHeaders } = require("better-auth/node");
 
 const { getAuth } = require("../lib/auth");
 const { getDB } = require("../config/db");
-const { requireAuth } = require("../middleware/auth");
+const { authenticateUser, requireAuth, requireRole } = require("../middleware/auth");
 const { sanitizeUser, isNonEmptyString, toId } = require("../utils/helpers");
 
 const router = express.Router();
+
+/**
+ * Vendor business profile fields. Kept in a whitelist so a client can never
+ * write role, vendorApproved, subscription or any other privileged field.
+ */
+const VENDOR_PROFILE_FIELDS = {
+  businessName: { min: 2, max: 100, required: true },
+  studioName: { min: 2, max: 100, required: false },
+  phone: { min: 0, max: 30, required: false },
+  location: { min: 0, max: 200, required: false },
+  bio: { min: 0, max: 1000, required: false },
+  website: { min: 0, max: 300, required: false },
+};
+
+const buildVendorProfile = (user) => {
+  const profile = { ...sanitizeUser(user) };
+  for (const field of Object.keys(VENDOR_PROFILE_FIELDS)) {
+    profile[field] = user[field] ?? "";
+  }
+  return profile;
+};
+
+// Pending vendors must be able to complete their profile while awaiting approval.
+const requireVendorAny = [authenticateUser, requireRole("vendor", "admin")];
 
 /** GET /api/v1/profile - current authenticated user */
 router.get("/", requireAuth, (req, res) => {
@@ -89,6 +113,97 @@ router.patch("/", requireAuth, async (req, res, next) => {
       success: true,
       message: "Profile updated successfully.",
       user: sanitizeUser(session.user),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** GET /api/v1/profile/vendor - vendor business profile (fresh from DB). */
+router.get("/vendor", requireVendorAny, async (req, res, next) => {
+  try {
+    const vendor = await getDB()
+      .collection("user")
+      .findOne({ _id: toId(req.user.id) });
+
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor profile not found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      profile: buildVendorProfile(vendor),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** PATCH /api/v1/profile/vendor - update only whitelisted business fields. */
+router.patch("/vendor", requireVendorAny, async (req, res, next) => {
+  try {
+    const updates = {};
+
+    for (const [field, rule] of Object.entries(VENDOR_PROFILE_FIELDS)) {
+      if (req.body[field] === undefined) continue;
+
+      const value = req.body[field];
+
+      if (typeof value !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: `${field} must be a string.`,
+        });
+      }
+
+      // Optional fields can be cleared with an empty string; required ones cannot.
+      if (
+        value.trim().length > rule.max ||
+        (value.trim().length > 0 && value.trim().length < rule.min) ||
+        (rule.required && value.trim().length === 0)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: `${field} must be between ${rule.min} and ${rule.max} characters.`,
+        });
+      }
+
+      if (field === "website" && value.trim() && !/^https?:\/\//i.test(value.trim())) {
+        return res.status(400).json({
+          success: false,
+          message: "website must start with http:// or https://.",
+        });
+      }
+
+      updates[field] = value.trim();
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Nothing to update.",
+      });
+    }
+
+    const db = getDB();
+    updates.updatedAt = new Date();
+
+    await db.collection("user").updateOne(
+      { _id: toId(req.user.id) },
+      { $set: updates },
+    );
+
+    const vendor = await db
+      .collection("user")
+      .findOne({ _id: toId(req.user.id) });
+
+    return res.status(200).json({
+      success: true,
+      message: "Vendor profile updated successfully.",
+      profile: buildVendorProfile(vendor),
     });
   } catch (error) {
     next(error);

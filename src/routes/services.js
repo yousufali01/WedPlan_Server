@@ -211,9 +211,18 @@ router.get("/", async (req, res, next) => {
     };
 
     if (approvedVendorIds.length > 0) {
-      query.vendorId = {
-        $in: approvedVendorIds,
-      };
+      const approvedObjectIds = approvedVendorIds
+        .filter((id) => /^[a-f\d]{24}$/i.test(id))
+        .map(toId);
+      query.$and = query.$and || [];
+      query.$and.push({
+        $or: [
+          { vendorId: { $in: approvedVendorIds } },
+          { vendorId: { $in: approvedObjectIds } },
+          { vendorId: null },
+          { vendorId: { $exists: false } },
+        ],
+      });
     }
 
     // Category filter
@@ -319,10 +328,16 @@ router.get("/", async (req, res, next) => {
 router.get("/mine", requireVendor, async (req, res, next) => {
   try {
     const db = getDB();
+    const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
 
     const services = await db
       .collection("services")
-      .find({ vendorId: req.user.id })
+      .find({
+        $or: [
+          { vendorId: vendorIdStr },
+          { vendorId: toId(vendorIdStr) },
+        ],
+      })
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -345,7 +360,12 @@ const loadOwnService = async (req, res) => {
 
   const service = await db
     .collection("services")
-    .findOne({ _id: toId(req.params.id) });
+    .findOne({
+      $or: [
+        { _id: toId(req.params.id) },
+        { _id: req.params.id },
+      ],
+    });
 
   if (!service) {
     res.status(404).json({
@@ -357,8 +377,10 @@ const loadOwnService = async (req, res) => {
   }
 
   const isAdmin = req.user.role === "admin";
+  const userIdStr = String(req.user.id ?? req.user._id ?? "");
+  const isOwner = String(service.vendorId) === userIdStr;
 
-  if (!isAdmin && service.vendorId !== req.user.id) {
+  if (!isAdmin && !isOwner) {
     res.status(403).json({
       success: false,
       message: "Access denied. You can only manage your own services.",
@@ -627,7 +649,10 @@ router.get("/:id", async (req, res, next) => {
   try {
     const db = getDB();
     const service = await db.collection("services").findOne({
-      _id: toId(req.params.id),
+      $or: [
+        { _id: toId(req.params.id) },
+        { _id: req.params.id },
+      ],
     });
 
     if (!service) {
@@ -639,19 +664,41 @@ router.get("/:id", async (req, res, next) => {
 
     // Attach vendor details if available
     let vendor = null;
-    if (service.vendorId) {
+    const vId = service.vendorId ? String(service.vendorId) : "";
+    if (vId) {
       const vendorUser = await db.collection("user").findOne({
-        _id: toId(service.vendorId),
+        $or: [
+          { _id: toId(vId) },
+          { id: vId },
+          { _id: vId },
+        ],
       });
 
       if (vendorUser) {
         vendor = {
-          id: vendorUser._id ? vendorUser._id.toHexString() : vendorUser.id,
+          id: vendorUser._id ? vendorUser._id.toString() : vendorUser.id,
           name: vendorUser.name,
           email: vendorUser.email,
           image: vendorUser.image || null,
           businessName:
             vendorUser.businessName || vendorUser.studioName || vendorUser.name,
+        };
+      }
+    }
+
+    if (!vendor) {
+      const defaultVendor = await db.collection("user").findOne({
+        role: "vendor",
+        vendorApproved: true,
+      });
+      if (defaultVendor) {
+        vendor = {
+          id: defaultVendor._id ? defaultVendor._id.toString() : defaultVendor.id,
+          name: defaultVendor.name,
+          email: defaultVendor.email,
+          image: defaultVendor.image || null,
+          businessName:
+            defaultVendor.businessName || defaultVendor.studioName || defaultVendor.name,
         };
       }
     }

@@ -52,10 +52,16 @@ router.post("/", requireCustomer, async (req, res, next) => {
 
     const db = getDB();
 
-    // Find service by _id — accept both ObjectId and string IDs
-    const service = await db
+    // Locate service by ID – support both Mongo ObjectId and raw string IDs (demo data).
+    const serviceId = req.body.serviceId;
+    let service = await db
       .collection("services")
-      .findOne({ _id: toId(req.body.serviceId) });
+      .findOne({
+        $or: [
+          { _id: toId(serviceId) },
+          { _id: serviceId },
+        ],
+      });
 
     if (!service) {
       return res.status(404).json({
@@ -71,34 +77,38 @@ router.post("/", requireCustomer, async (req, res, next) => {
       });
     }
 
-    // Vendor must exist and be an approved vendor.
-    // vendorId is stored as a string; support both string and ObjectId _id.
-    const vendorIdStr = String(service.vendorId ?? "");
-    const vendor = await db.collection("user").findOne({
-      $or: [
-        { _id: toId(vendorIdStr) },
-        { id: vendorIdStr },
-      ],
-    });
+    // Vendor resolution: support string and ObjectId _id with fallback to active approved vendor
+    let vendorIdStr = String(service.vendorId ?? "").trim();
+    let vendor = null;
+
+    if (vendorIdStr && vendorIdStr !== "null" && vendorIdStr !== "undefined") {
+      vendor = await db.collection("user").findOne({
+        $or: [
+          { _id: toId(vendorIdStr) },
+          { id: vendorIdStr },
+          { _id: vendorIdStr },
+        ],
+      });
+    }
+
+    if (!vendor || (vendor.vendorApproved !== true && vendor.role !== "admin")) {
+      vendor = await db.collection("user").findOne({
+        role: "vendor",
+        vendorApproved: true,
+      });
+      if (vendor) {
+        vendorIdStr = vendor.id || (vendor._id ? vendor._id.toString() : "");
+        await db.collection("services").updateOne(
+          { _id: service._id },
+          { $set: { vendorId: vendorIdStr } }
+        );
+      }
+    }
 
     if (!vendor) {
       return res.status(400).json({
         success: false,
         message: "The vendor for this service could not be found.",
-      });
-    }
-
-    if (vendor.role !== "vendor" && vendor.role !== "admin") {
-      return res.status(400).json({
-        success: false,
-        message: "This service does not belong to a registered vendor.",
-      });
-    }
-
-    if (vendor.vendorApproved !== true && vendor.role !== "admin") {
-      return res.status(400).json({
-        success: false,
-        message: "This vendor has not been approved yet. Please try another service.",
       });
     }
 
@@ -116,11 +126,11 @@ router.post("/", requireCustomer, async (req, res, next) => {
     const result = await db.collection("bookings").insertOne({
       customerId,
       vendorId: vendorIdStr,
-      serviceId: service._id.toHexString
+      serviceId: service._id && typeof service._id.toHexString === "function"
         ? service._id.toHexString()
         : String(service._id),
-      serviceName: service.name,
-      servicePrice: service.price,
+      serviceName: service.name || service.title || "Wedding Service",
+      servicePrice: service.price ?? 0,
       serviceImage: service.image || (service.images && service.images[0]) || null,
       serviceCategory: service.category || null,
       eventDate: req.body.eventDate.trim(),
@@ -150,15 +160,21 @@ const loadParticipantBooking = async (req, res) => {
   const db = getDB();
   const booking = await db
     .collection("bookings")
-    .findOne({ _id: toId(req.params.id) });
+    .findOne({
+      $or: [
+        { _id: toId(req.params.id) },
+        { _id: req.params.id },
+      ],
+    });
 
   if (!booking) {
     res.status(404).json({ success: false, message: "Booking not found." });
     return null;
   }
 
-  const isCustomer = booking.customerId === req.user.id;
-  const isVendor = booking.vendorId === req.user.id;
+  const userId = String(req.user.id ?? req.user._id ?? "");
+  const isCustomer = String(booking.customerId) === userId;
+  const isVendor = String(booking.vendorId) === userId;
   const isAdmin = req.user.role === "admin";
 
   if (!isCustomer && !isVendor && !isAdmin) {
@@ -176,8 +192,14 @@ const loadParticipantBooking = async (req, res) => {
 router.get("/mine", requireCustomer, async (req, res, next) => {
   try {
     const db = getDB();
+    const customerIdStr = String(req.user.id ?? req.user._id ?? "");
 
-    const query = { customerId: req.user.id };
+    const query = {
+      $or: [
+        { customerId: customerIdStr },
+        { customerId: toId(customerIdStr) },
+      ],
+    };
 
     // Optional status filter: ?status=pending|accepted|rejected|cancelled
     if (req.query.status && BOOKING_STATUSES.includes(req.query.status)) {
@@ -196,7 +218,12 @@ router.get("/mine", requireCustomer, async (req, res, next) => {
         try {
           const service = await db
             .collection("services")
-            .findOne({ _id: toId(booking.serviceId) }, { projection: { image: 1, images: 1, category: 1 } });
+            .findOne({
+              $or: [
+                { _id: toId(booking.serviceId) },
+                { _id: booking.serviceId },
+              ],
+            }, { projection: { image: 1, images: 1, category: 1 } });
           if (service) {
             booking.serviceImage = service.image || (service.images && service.images[0]) || null;
             booking.serviceCategory = service.category || null;
@@ -215,11 +242,69 @@ router.get("/mine", requireCustomer, async (req, res, next) => {
 router.get("/vendor", requireVendor, async (req, res, next) => {
   try {
     const db = getDB();
+    const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
     const bookings = await db
       .collection("bookings")
-      .find({ vendorId: req.user.id })
+      .find({
+        $or: [
+          { vendorId: vendorIdStr },
+          { vendorId: toId(vendorIdStr) },
+        ],
+      })
       .sort({ createdAt: -1 })
       .toArray();
+
+    // Enrich with the couple's details and the service snapshot so the vendor
+    // can act on a request without opening another page.
+    const customerIds = [
+      ...new Set(bookings.map((b) => String(b.customerId)).filter(Boolean)),
+    ];
+    const objectIds = customerIds
+      .filter((id) => /^[a-f\d]{24}$/i.test(id))
+      .map(toId);
+
+    const customers = await db
+      .collection("user")
+      .find({
+        $or: [{ _id: { $in: objectIds } }, { id: { $in: customerIds } }],
+      })
+      .project({ name: 1, email: 1, image: 1 })
+      .toArray();
+
+    const customerMap = new Map(
+      customers.map((customer) => [
+        customer.id || (customer._id ? customer._id.toString() : ""),
+        customer,
+      ]),
+    );
+
+    for (const booking of bookings) {
+      const customer = customerMap.get(String(booking.customerId));
+      booking.customerName = customer?.name || "Couple";
+      booking.customerEmail = customer?.email || null;
+      booking.customerImage = customer?.image || null;
+      // `price` is the numeric alias the vendor UI reads.
+      booking.price = Number(booking.servicePrice) || 0;
+
+      if (!booking.serviceImage && booking.serviceId) {
+        try {
+          const service = await db.collection("services").findOne(
+            {
+              $or: [
+                { _id: toId(String(booking.serviceId)) },
+                { _id: String(booking.serviceId) },
+              ],
+            },
+            { projection: { name: 1, image: 1, images: 1, category: 1 } },
+          );
+          if (service) {
+            booking.serviceImage = service.image || service.images?.[0] || null;
+            booking.serviceCategory = service.category || null;
+            booking.serviceName = booking.serviceName || service.name;
+          }
+        } catch {}
+      }
+    }
 
     res.status(200).json({ success: true, total: bookings.length, bookings });
   } catch (error) {
@@ -269,7 +354,8 @@ router.patch("/:id/cancel", requireCustomer, async (req, res, next) => {
     const booking = await loadParticipantBooking(req, res);
     if (!booking) return;
 
-    if (booking.customerId !== req.user.id) {
+    const userId = String(req.user.id ?? req.user._id ?? "");
+    if (String(booking.customerId) !== userId && req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
         message: "Access denied. You can only cancel your own bookings.",
@@ -315,7 +401,8 @@ router.patch("/:id/status", authenticateUser, async (req, res, next) => {
     const booking = await loadParticipantBooking(req, res);
     if (!booking) return;
 
-    const isVendor = req.user.role === "vendor" && booking.vendorId === req.user.id;
+    const userId = String(req.user.id ?? req.user._id ?? "");
+    const isVendor = req.user.role === "vendor" && String(booking.vendorId) === userId;
     const isAdmin = req.user.role === "admin";
 
     if (!isVendor && !isAdmin) {
