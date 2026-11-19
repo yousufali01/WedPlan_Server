@@ -1,17 +1,13 @@
 /**
  * Authentication & authorization middleware for WedPlan.
  *
- * authenticateUser:
- *  - Preferred: Better Auth session cookie (verified server-side, fresh DB user).
- *  - Also accepts a Bearer JWT issued by the Better Auth JWT plugin
- *    (verified with JWKS: signature, expiration, issuer and audience).
- *  - The current role is always read from the DATABASE, never from the request body,
- *    so stale tokens/roles cannot grant privileges.
- *
- * requireCustomer / requireVendor / requireAdmin:
- *  - Role gate built on top of authenticateUser.
- *  - Vendors must additionally be approved by an admin (vendorApproved === true).
+ * - Supports Better Auth session cookies and Bearer JWT.
+ * - Always loads the current user from MongoDB.
+ * - Blocked users cannot access protected APIs.
+ * - Expired bans are allowed automatically.
+ * - Roles and vendor approval are always read from MongoDB.
  */
+
 const { fromNodeHeaders } = require("better-auth/node");
 const { createRemoteJWKSet, jwtVerify } = require("jose");
 
@@ -21,16 +17,15 @@ const { sanitizeUser, toId } = require("../utils/helpers");
 
 let jwks = null;
 
-/** Lazily creates the JWKS verifier pointed at this server's own JWKS endpoint. */
 const getJWKSet = () => {
   if (!jwks) {
     const jwksURL = new URL("/api/auth/jwks", process.env.BETTER_AUTH_URL);
     jwks = createRemoteJWKSet(jwksURL);
   }
+
   return jwks;
 };
 
-/** Verifies a Bearer JWT: signature, expiration, issuer and audience are all checked. */
 const verifyBearerToken = async (token) => {
   const baseURL = process.env.BETTER_AUTH_URL;
 
@@ -43,25 +38,44 @@ const verifyBearerToken = async (token) => {
 };
 
 /**
- * Authenticates the request.
- * Attaches the fresh DB user record to req.user on success, otherwise 401.
- *
- * Always ensures req.user has a normalised string `id` field regardless of
- * whether the user came from a session cookie (Better Auth) or a JWT.
+ * Check whether a Better Auth banned user is currently blocked.
+ * An expired temporary ban does not block access.
+ */
+const isUserBlocked = (user) => {
+  if (user?.banned !== true) {
+    return false;
+  }
+
+  if (!user.banExpires) {
+    return true;
+  }
+
+  const expiresAt = new Date(user.banExpires).getTime();
+
+  if (Number.isNaN(expiresAt)) {
+    return true;
+  }
+
+  return expiresAt > Date.now();
+};
+
+/**
+ * Authenticate and load fresh user data from MongoDB.
  */
 const authenticateUser = async (req, res, next) => {
   try {
     const auth = getAuth();
 
-    let user = null;
+    let userId = null;
 
     const authHeader = req.headers.authorization || "";
 
+    // 1. Bearer JWT authentication
     if (authHeader.startsWith("Bearer ")) {
-      // JWT API-token path
       const token = authHeader.slice(7).trim();
 
       let payload;
+
       try {
         payload = await verifyBearerToken(token);
       } catch {
@@ -71,56 +85,71 @@ const authenticateUser = async (req, res, next) => {
         });
       }
 
-      // Load the CURRENT user record from the database (fresh role & approval state)
-      const db = getDB();
-      const dbUser = await db
-        .collection("user")
-        .findOne({ _id: toId(payload.sub) });
-
-      if (dbUser) {
-        // Normalise: always expose a string `id` field
-        const id =
-          dbUser.id ??
-          (dbUser._id
-            ? typeof dbUser._id.toHexString === "function"
-              ? dbUser._id.toHexString()
-              : String(dbUser._id)
-            : payload.sub);
-        user = { ...dbUser, id };
-      }
+      userId = payload.sub;
     } else {
-      // Session cookie path (preferred for same-origin requests)
+      // 2. Better Auth session authentication
       const session = await auth.api.getSession({
         headers: fromNodeHeaders(req.headers),
       });
 
-      if (session?.user) {
-        // Better Auth session user already has an `id` string.
-        // If role is missing (e.g., older Better Auth version), default to "customer".
-        const rawUser = session.user;
-        user = {
-          ...rawUser,
-          id: rawUser.id ?? rawUser._id ?? "",
-          role: rawUser.role ?? "customer",
-        };
+      if (session?.user?.id) {
+        userId = session.user.id;
       }
     }
 
-    if (!user) {
+    if (!userId) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized. Please log in first.",
       });
     }
 
-    req.user = user;
+    // 3. Always load the latest user from MongoDB
+    const db = getDB();
+
+    const query = {
+      $or: [
+        { _id: toId(userId) },
+        { id: String(userId) },
+      ],
+    };
+
+    const dbUser = await db.collection("user").findOne(query);
+
+    if (!dbUser) {
+      return res.status(401).json({
+        success: false,
+        message: "User account not found.",
+      });
+    }
+
+    // 4. Blocked user protection
+    if (isUserBlocked(dbUser)) {
+      return res.status(403).json({
+        success: false,
+        blocked: true,
+        message:
+          "Your account has been blocked by the administrator. Please contact support.",
+      });
+    }
+
+    // 5. Normalize current DB user
+    const id =
+      dbUser.id ??
+      (dbUser._id?.toHexString ? dbUser._id.toHexString() : String(dbUser._id));
+
+    req.user = {
+      ...dbUser,
+      id,
+    };
+
     next();
   } catch (error) {
     next(error);
   }
 };
 
-/** Builds a role-check middleware. Never trusts role data from the request. */
+/** Role authorization */
 const requireRole =
   (...roles) =>
   (req, res, next) => {
@@ -136,7 +165,7 @@ const requireRole =
     next();
   };
 
-/** Vendors must be approved by an admin before they can act as vendors. */
+/** Vendor approval protection */
 const requireVendorApproved = (req, res, next) => {
   if (req.user?.vendorApproved !== true) {
     return res.status(403).json({
@@ -145,26 +174,24 @@ const requireVendorApproved = (req, res, next) => {
         "Your vendor account has not been approved by an admin yet. Please wait for approval.",
     });
   }
+
   next();
 };
 
-/** Authenticated user of any role. */
 const requireAuth = [authenticateUser];
 
-/** Customer-only routes. Admins and vendors cannot create customer bookings. */
 const requireCustomer = [authenticateUser, requireRole("customer")];
 
-/** Vendor-only routes (must be approved by an admin). */
 const requireVendor = [
   authenticateUser,
   requireRole("vendor"),
   requireVendorApproved,
 ];
 
-/** Admin-only routes. */
 const requireAdmin = [authenticateUser, requireRole("admin")];
 
 module.exports = {
+  isUserBlocked,
   authenticateUser,
   requireRole,
   requireVendorApproved,

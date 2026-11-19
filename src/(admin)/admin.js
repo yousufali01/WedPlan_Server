@@ -81,59 +81,55 @@ router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
  * PATCH /api/v1/admin/vendors/:id/approval - approve or reject a vendor.
  * Rejection also unpublishes the vendor's services from the public list.
  */
-router.patch(
-  "/vendors/:id/approval",
-  requireAdmin,
-  async (req, res, next) => {
-    try {
-      const approved = req.body.approved;
+router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
+  try {
+    const approved = req.body.approved;
 
-      if (typeof approved !== "boolean") {
-        return res.status(400).json({
-          success: false,
-          message: "Send { approved: true } or { approved: false }.",
-        });
-      }
-
-      const db = getDB();
-      const user = await db
-        .collection("user")
-        .findOne({ _id: toId(req.params.id), role: "vendor" });
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: "Vendor not found.",
-        });
-      }
-
-      await db
-        .collection("user")
-        .updateOne(
-          { _id: user._id },
-          { $set: { vendorApproved: approved, updatedAt: new Date() } }
-        );
-
-      // Keep the service catalog consistent with vendor approval
-      await db
-        .collection("services")
-        .updateMany(
-          { vendorId: user._id.toHexString() },
-          { $set: { availability: approved, updatedAt: new Date() } }
-        );
-
-      res.status(200).json({
-        success: true,
-        message: approved
-          ? "Vendor approved successfully."
-          : "Vendor rejected. Their services are now hidden.",
-        vendor: sanitizeUser({ ...user, vendorApproved: approved }),
+    if (typeof approved !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "Send { approved: true } or { approved: false }.",
       });
-    } catch (error) {
-      next(error);
     }
+
+    const db = getDB();
+    const user = await db
+      .collection("user")
+      .findOne({ _id: toId(req.params.id), role: "vendor" });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found.",
+      });
+    }
+
+    await db
+      .collection("user")
+      .updateOne(
+        { _id: user._id },
+        { $set: { vendorApproved: approved, updatedAt: new Date() } },
+      );
+
+    // Keep the service catalog consistent with vendor approval
+    await db
+      .collection("services")
+      .updateMany(
+        { vendorId: user._id.toHexString() },
+        { $set: { availability: approved, updatedAt: new Date() } },
+      );
+
+    res.status(200).json({
+      success: true,
+      message: approved
+        ? "Vendor approved successfully."
+        : "Vendor rejected. Their services are now hidden.",
+      vendor: sanitizeUser({ ...user, vendorApproved: approved }),
+    });
+  } catch (error) {
+    next(error);
   }
-);
+});
 
 /** GET /api/v1/admin/vendors/pending - vendors waiting for approval */
 router.get("/vendors/pending", requireAdmin, async (req, res, next) => {
@@ -178,6 +174,12 @@ router.get("/services", requireAdmin, async (req, res, next) => {
 /** POST /api/v1/admin/users/:id/ban - ban a user (admin plugin) */
 router.post("/users/:id/ban", requireAdmin, async (req, res, next) => {
   try {
+    if (req.params.id === req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "You cannot block your own account.",
+      });
+    }
     const auth = getAuth();
     await auth.api.banUser({
       headers: headers(req),
@@ -262,7 +264,10 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
         title: b.serviceName || "Wedding Service Reservation",
         customer: b.customerName || b.customerId || "Couple",
         vendor: b.vendorId || "Vendor",
-        amount: typeof b.servicePrice === "number" ? b.servicePrice : Number(b.price) || 0,
+        amount:
+          typeof b.servicePrice === "number"
+            ? b.servicePrice
+            : Number(b.price) || 0,
         currency: "BDT",
         status: b.status || "pending",
         date: b.createdAt || new Date(),
@@ -284,12 +289,13 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
         amount: isYearly ? 290 : 29,
         currency: "USD",
         status: v.subscription?.status || "active",
-        date: v.subscription?.startedAt || v.subscription?.updatedAt || new Date(),
+        date:
+          v.subscription?.startedAt || v.subscription?.updatedAt || new Date(),
       });
     }
 
     transactions.sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
 
     const totalBookingValue = bookings

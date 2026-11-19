@@ -21,8 +21,16 @@ const toId = (value) => {
 const sanitizeUser = (user) => {
   if (!user) return null;
 
-  // Raw MongoDB docs have _id (ObjectId); Better Auth API responses have id (string)
-  const id = user.id ?? (user._id ? user._id.toHexString() : undefined);
+  // Raw MongoDB docs have _id (ObjectId or string); Better Auth API responses have id (string)
+  const id =
+    user.id ??
+    (user._id
+      ? typeof user._id === "string"
+        ? user._id
+        : user._id.toHexString
+          ? user._id.toHexString()
+          : String(user._id)
+      : undefined);
 
   const {
     name,
@@ -31,6 +39,9 @@ const sanitizeUser = (user) => {
     image,
     role,
     vendorApproved,
+    banned,
+    banReason,
+    banExpires,
     createdAt,
     updatedAt,
   } = user;
@@ -43,6 +54,9 @@ const sanitizeUser = (user) => {
     image: image ?? null,
     role: role ?? "customer",
     vendorApproved: Boolean(vendorApproved),
+    banned: Boolean(banned),
+    banReason: banReason ?? null,
+    banExpires: banExpires ?? null,
     createdAt,
     updatedAt,
   };
