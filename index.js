@@ -21,7 +21,12 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  // Add Vercel client URL for production deployments
+  process.env.VERCEL_CLIENT_URL || "https://wedplan-client-rho.vercel.app",
 ].filter(Boolean);
+
+// Ensure the client URL is set in Vercel environment variables as VERCEL_CLIENT_URL.
+// This prevents CORS errors when the client is hosted on Vercel.
 
 app.use(
   cors({
