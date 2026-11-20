@@ -3,13 +3,14 @@
  * Role changes and vendor approvals go through Better Auth's admin plugin
  * APIs, so all privilege checks are enforced server-side.
  */
-const express = require("express");
-const { fromNodeHeaders } = require("better-auth/node");
 
-const { getAuth } = require("../(auth)/auth");
-const { getDB } = require("../config/db");
-const { requireAdmin } = require("../(auth)/middleware");
-const { sanitizeUser, toId } = require("../utils/helpers");
+import express from "express";
+import { fromNodeHeaders } from "better-auth/node";
+
+import { getAuth } from "../(auth)/auth.js";
+import { getDB } from "../config/db.js";
+import { requireAdmin } from "../(auth)/middleware.js";
+import { sanitizeUser, toId } from "../utils/helpers.js";
 
 const router = express.Router();
 
@@ -24,7 +25,12 @@ router.get("/users", requireAdmin, async (req, res, next) => {
 
     const result = await auth.api.listUsers({
       headers: headers(req),
-      query: { limit, offset, sortBy: "createdAt", sortDirection: "desc" },
+      query: {
+        limit,
+        offset,
+        sortBy: "createdAt",
+        sortDirection: "desc",
+      },
     });
 
     res.status(200).json({
@@ -38,9 +44,8 @@ router.get("/users", requireAdmin, async (req, res, next) => {
 });
 
 /**
- * PATCH /api/v1/admin/users/:id/role - securely change a user's role.
- * Only "customer" | "vendor" | "admin" are accepted; admins cannot change
- * their own role (prevents accidental admin lockout).
+ * PATCH /api/v1/admin/users/:id/role
+ * Securely change a user's role.
  */
 router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
   try {
@@ -62,9 +67,13 @@ router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
     }
 
     const auth = getAuth();
+
     const result = await auth.api.setRole({
       headers: headers(req),
-      body: { userId: req.params.id, role },
+      body: {
+        userId: req.params.id,
+        role,
+      },
     });
 
     res.status(200).json({
@@ -78,8 +87,8 @@ router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
 });
 
 /**
- * PATCH /api/v1/admin/vendors/:id/approval - approve or reject a vendor.
- * Rejection also unpublishes the vendor's services from the public list.
+ * PATCH /api/v1/admin/vendors/:id/approval
+ * Approve or reject a vendor.
  */
 router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
   try {
@@ -93,9 +102,11 @@ router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
     }
 
     const db = getDB();
-    const user = await db
-      .collection("user")
-      .findOne({ _id: toId(req.params.id), role: "vendor" });
+
+    const user = await db.collection("user").findOne({
+      _id: toId(req.params.id),
+      role: "vendor",
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -104,40 +115,53 @@ router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
       });
     }
 
-    await db
-      .collection("user")
-      .updateOne(
-        { _id: user._id },
-        { $set: { vendorApproved: approved, updatedAt: new Date() } },
-      );
+    await db.collection("user").updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          vendorApproved: approved,
+          updatedAt: new Date(),
+        },
+      },
+    );
 
     // Keep the service catalog consistent with vendor approval
-    await db
-      .collection("services")
-      .updateMany(
-        { vendorId: user._id.toHexString() },
-        { $set: { availability: approved, updatedAt: new Date() } },
-      );
+    await db.collection("services").updateMany(
+      { vendorId: user._id.toHexString() },
+      {
+        $set: {
+          availability: approved,
+          updatedAt: new Date(),
+        },
+      },
+    );
 
     res.status(200).json({
       success: true,
       message: approved
         ? "Vendor approved successfully."
         : "Vendor rejected. Their services are now hidden.",
-      vendor: sanitizeUser({ ...user, vendorApproved: approved }),
+      vendor: sanitizeUser({
+        ...user,
+        vendorApproved: approved,
+      }),
     });
   } catch (error) {
     next(error);
   }
 });
 
-/** GET /api/v1/admin/vendors/pending - vendors waiting for approval */
+/** GET /api/v1/admin/vendors/pending */
 router.get("/vendors/pending", requireAdmin, async (req, res, next) => {
   try {
     const db = getDB();
+
     const vendors = await db
       .collection("user")
-      .find({ role: "vendor", vendorApproved: { $ne: true } })
+      .find({
+        role: "vendor",
+        vendorApproved: { $ne: true },
+      })
       .sort({ createdAt: -1 })
       .toArray();
 
@@ -151,10 +175,11 @@ router.get("/vendors/pending", requireAdmin, async (req, res, next) => {
   }
 });
 
-/** GET /api/v1/admin/services - admin views all services */
+/** GET /api/v1/admin/services */
 router.get("/services", requireAdmin, async (req, res, next) => {
   try {
     const db = getDB();
+
     const services = await db
       .collection("services")
       .find({})
@@ -171,7 +196,7 @@ router.get("/services", requireAdmin, async (req, res, next) => {
   }
 });
 
-/** POST /api/v1/admin/users/:id/ban - ban a user (admin plugin) */
+/** POST /api/v1/admin/users/:id/ban */
 router.post("/users/:id/ban", requireAdmin, async (req, res, next) => {
   try {
     if (req.params.id === req.user.id) {
@@ -180,7 +205,9 @@ router.post("/users/:id/ban", requireAdmin, async (req, res, next) => {
         message: "You cannot block your own account.",
       });
     }
+
     const auth = getAuth();
+
     await auth.api.banUser({
       headers: headers(req),
       body: {
@@ -190,28 +217,37 @@ router.post("/users/:id/ban", requireAdmin, async (req, res, next) => {
       },
     });
 
-    res.status(200).json({ success: true, message: "User banned." });
+    res.status(200).json({
+      success: true,
+      message: "User banned.",
+    });
   } catch (error) {
     next(error);
   }
 });
 
-/** POST /api/v1/admin/users/:id/unban - unban a user (admin plugin) */
+/** POST /api/v1/admin/users/:id/unban */
 router.post("/users/:id/unban", requireAdmin, async (req, res, next) => {
   try {
     const auth = getAuth();
+
     await auth.api.unbanUser({
       headers: headers(req),
-      body: { userId: req.params.id },
+      body: {
+        userId: req.params.id,
+      },
     });
 
-    res.status(200).json({ success: true, message: "User unbanned." });
+    res.status(200).json({
+      success: true,
+      message: "User unbanned.",
+    });
   } catch (error) {
     next(error);
   }
 });
 
-/** DELETE /api/v1/admin/users/:id - delete a user (admin plugin) */
+/** DELETE /api/v1/admin/users/:id */
 router.delete("/users/:id", requireAdmin, async (req, res, next) => {
   try {
     if (req.params.id === req.user.id) {
@@ -222,18 +258,24 @@ router.delete("/users/:id", requireAdmin, async (req, res, next) => {
     }
 
     const auth = getAuth();
+
     await auth.api.removeUser({
       headers: headers(req),
-      body: { userId: req.params.id },
+      body: {
+        userId: req.params.id,
+      },
     });
 
-    res.status(200).json({ success: true, message: "User deleted." });
+    res.status(200).json({
+      success: true,
+      message: "User deleted.",
+    });
   } catch (error) {
     next(error);
   }
 });
 
-/** GET /api/v1/admin/transactions - transactions and financial records */
+/** GET /api/v1/admin/transactions */
 router.get("/transactions", requireAdmin, async (req, res, next) => {
   try {
     const db = getDB();
@@ -250,7 +292,9 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
       .collection("user")
       .find({
         role: "vendor",
-        "subscription.plan": { $in: ["premium_monthly", "premium_yearly"] },
+        "subscription.plan": {
+          $in: ["premium_monthly", "premium_yearly"],
+        },
       })
       .toArray();
 
@@ -278,6 +322,7 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
     // Map subscriptions
     for (const v of vendorsWithSub) {
       const isYearly = v.subscription?.plan === "premium_yearly";
+
       transactions.push({
         id: `sub-${v._id.toHexString()}`,
         type: "subscription",
@@ -322,4 +367,4 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

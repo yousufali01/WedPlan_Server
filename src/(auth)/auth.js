@@ -7,9 +7,9 @@
  * Roles: customer | vendor | admin
  */
 
-const { betterAuth } = require("better-auth");
-const { mongodbAdapter } = require("@better-auth/mongo-adapter");
-const { admin, jwt } = require("better-auth/plugins");
+import { betterAuth } from "better-auth";
+import { mongodbAdapter } from "@better-auth/mongo-adapter";
+import { admin, jwt } from "better-auth/plugins";
 
 const ROLES = ["customer", "vendor", "admin"];
 
@@ -68,6 +68,7 @@ const initAuth = (db, client) => {
     secret: process.env.BETTER_AUTH_SECRET,
 
     trustedOrigins,
+
     advanced: {
       defaultCookieAttributes: {
         sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
@@ -166,8 +167,8 @@ const getAuth = () => {
   return auth;
 };
 
-module.exports = {
-  initAuth,
-  getAuth,
-  ROLES,
-};
+// ─────────────────────────────────────────────
+// EXPORTS
+// ─────────────────────────────────────────────
+
+export { initAuth, getAuth, ROLES };

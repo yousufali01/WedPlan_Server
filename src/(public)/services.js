@@ -6,20 +6,20 @@
  * - Public list only shows available services approved by admin.
  */
 
-const express = require("express");
+import express from "express";
 
-const { getDB } = require("../config/db");
-const {
+import { getDB } from "../config/db.js";
+import {
   requireVendor,
   authenticateUser,
   requireAdmin,
-} = require("../(auth)/middleware");
+} from "../(auth)/middleware.js";
 
-const {
+import {
   toId,
   isNonEmptyString,
   isNonNegativeNumber,
-} = require("../utils/helpers");
+} from "../utils/helpers.js";
 
 const router = express.Router();
 
@@ -787,4 +787,4 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

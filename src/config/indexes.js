@@ -50,4 +50,4 @@ const ensureIndexes = async (db) => {
   console.log(`Database indexes ready: ${created.join(", ")}`);
 };
 
-module.exports = { ensureIndexes };
+export { ensureIndexes };

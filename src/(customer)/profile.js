@@ -3,19 +3,24 @@
  * Clients can only change name/image - role, vendorApproved and email
  * are never accepted from the request body (no mass assignment).
  */
-const express = require("express");
-const { fromNodeHeaders } = require("better-auth/node");
 
-const { getAuth } = require("../(auth)/auth");
-const { getDB } = require("../config/db");
-const { authenticateUser, requireAuth, requireRole } = require("../(auth)/middleware");
-const { sanitizeUser, isNonEmptyString, toId } = require("../utils/helpers");
+import express from "express";
+import { fromNodeHeaders } from "better-auth/node";
+
+import { getAuth } from "../(auth)/auth.js";
+import { getDB } from "../config/db.js";
+import {
+  authenticateUser,
+  requireAuth,
+  requireRole,
+} from "../(auth)/middleware.js";
+import { sanitizeUser, isNonEmptyString, toId } from "../utils/helpers.js";
 
 const router = express.Router();
 
 /**
- * Vendor business profile fields. Kept in a whitelist so a client can never
- * write role, vendorApproved, subscription or any other privileged field.
+ * Vendor business profile fields.
+ * Client can never write role, vendorApproved or subscription.
  */
 const VENDOR_PROFILE_FIELDS = {
   businessName: { min: 2, max: 100, required: true },
@@ -28,16 +33,18 @@ const VENDOR_PROFILE_FIELDS = {
 
 const buildVendorProfile = (user) => {
   const profile = { ...sanitizeUser(user) };
+
   for (const field of Object.keys(VENDOR_PROFILE_FIELDS)) {
     profile[field] = user[field] ?? "";
   }
+
   return profile;
 };
 
-// Pending vendors must be able to complete their profile while awaiting approval.
+// Pending vendors can complete their profile.
 const requireVendorAny = [authenticateUser, requireRole("vendor", "admin")];
 
-/** GET /api/v1/profile - current authenticated user */
+/** GET /api/v1/profile */
 router.get("/", requireAuth, (req, res) => {
   res.status(200).json({
     success: true,
@@ -45,28 +52,43 @@ router.get("/", requireAuth, (req, res) => {
   });
 });
 
-/** POST /api/v1/profile/apply-vendor - request to become a vendor (pending admin approval) */
+/** POST /api/v1/profile/apply-vendor */
 router.post("/apply-vendor", requireAuth, async (req, res, next) => {
   try {
     const db = getDB();
-    const userId = req.user.id || (req.user._id ? req.user._id.toHexString() : null);
+
+    const userId =
+      req.user.id || (req.user._id ? req.user._id.toHexString() : null);
+
     if (!userId) {
-      return res.status(400).json({ success: false, message: "User not found." });
+      return res.status(400).json({
+        success: false,
+        message: "User not found.",
+      });
     }
+
     await db.collection("user").updateOne(
       { _id: toId(userId) },
-      { $set: { role: "vendor", vendorApproved: false, updatedAt: new Date() } }
+      {
+        $set: {
+          role: "vendor",
+          vendorApproved: false,
+          updatedAt: new Date(),
+        },
+      },
     );
+
     res.status(200).json({
       success: true,
-      message: "Vendor application submitted successfully. Awaiting admin approval.",
+      message:
+        "Vendor application submitted successfully. Awaiting admin approval.",
     });
   } catch (error) {
     next(error);
   }
 });
 
-/** PATCH /api/v1/profile - update own profile (name and image only) */
+/** PATCH /api/v1/profile */
 router.patch("/", requireAuth, async (req, res, next) => {
   try {
     const updates = {};
@@ -78,16 +100,21 @@ router.patch("/", requireAuth, async (req, res, next) => {
           message: "Name must be a string between 2 and 50 characters.",
         });
       }
+
       updates.name = req.body.name.trim();
     }
 
     if (req.body.image !== undefined) {
-      if (req.body.image !== null && !isNonEmptyString(req.body.image, 1, 500)) {
+      if (
+        req.body.image !== null &&
+        !isNonEmptyString(req.body.image, 1, 500)
+      ) {
         return res.status(400).json({
           success: false,
           message: "Image must be a URL string (or null to remove it).",
         });
       }
+
       updates.image = req.body.image;
     }
 
@@ -99,6 +126,7 @@ router.patch("/", requireAuth, async (req, res, next) => {
     }
 
     const auth = getAuth();
+
     await auth.api.updateUser({
       headers: fromNodeHeaders(req.headers),
       body: updates,
@@ -119,12 +147,14 @@ router.patch("/", requireAuth, async (req, res, next) => {
   }
 });
 
-/** GET /api/v1/profile/vendor - vendor business profile (fresh from DB). */
+/** GET /api/v1/profile/vendor */
 router.get("/vendor", requireVendorAny, async (req, res, next) => {
   try {
     const vendor = await getDB()
       .collection("user")
-      .findOne({ _id: toId(req.user.id) });
+      .findOne({
+        _id: toId(req.user.id),
+      });
 
     if (!vendor) {
       return res.status(404).json({
@@ -142,7 +172,7 @@ router.get("/vendor", requireVendorAny, async (req, res, next) => {
   }
 });
 
-/** PATCH /api/v1/profile/vendor - update only whitelisted business fields. */
+/** PATCH /api/v1/profile/vendor */
 router.patch("/vendor", requireVendorAny, async (req, res, next) => {
   try {
     const updates = {};
@@ -159,7 +189,7 @@ router.patch("/vendor", requireVendorAny, async (req, res, next) => {
         });
       }
 
-      // Optional fields can be cleared with an empty string; required ones cannot.
+      // Optional fields can be cleared with an empty string.
       if (
         value.trim().length > rule.max ||
         (value.trim().length > 0 && value.trim().length < rule.min) ||
@@ -171,7 +201,12 @@ router.patch("/vendor", requireVendorAny, async (req, res, next) => {
         });
       }
 
-      if (field === "website" && value.trim() && !/^https?:\/\//i.test(value.trim())) {
+      // Validate website URL
+      if (
+        field === "website" &&
+        value.trim() &&
+        !/^https?:\/\//i.test(value.trim())
+      ) {
         return res.status(400).json({
           success: false,
           message: "website must start with http:// or https://.",
@@ -189,16 +224,21 @@ router.patch("/vendor", requireVendorAny, async (req, res, next) => {
     }
 
     const db = getDB();
+
     updates.updatedAt = new Date();
 
     await db.collection("user").updateOne(
-      { _id: toId(req.user.id) },
-      { $set: updates },
+      {
+        _id: toId(req.user.id),
+      },
+      {
+        $set: updates,
+      },
     );
 
-    const vendor = await db
-      .collection("user")
-      .findOne({ _id: toId(req.user.id) });
+    const vendor = await db.collection("user").findOne({
+      _id: toId(req.user.id),
+    });
 
     return res.status(200).json({
       success: true,
@@ -210,4 +250,4 @@ router.patch("/vendor", requireVendorAny, async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

@@ -1,4 +1,4 @@
-const { MongoClient, ServerApiVersion } = require("mongodb");
+import { MongoClient, ServerApiVersion } from "mongodb";
 
 let client = null;
 let db = null;
@@ -185,10 +185,4 @@ const closeDB = async () => {
 // EXPORTS
 // ─────────────────────────────────────────────
 
-module.exports = {
-  connectDB,
-  getDB,
-  getClient,
-  closeDB,
-  buildUri,
-};
+export { connectDB, getDB, getClient, closeDB, buildUri };

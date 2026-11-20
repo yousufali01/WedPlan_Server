@@ -1,4 +1,4 @@
-const { ObjectId } = require("mongodb");
+import { ObjectId } from "mongodb";
 
 /**
  * Converts a string id to a MongoDB ObjectId when possible.
@@ -10,6 +10,7 @@ const toId = (value) => {
   if (typeof value !== "string" || !/^[a-f\d]{24}$/i.test(value)) {
     return value;
   }
+
   try {
     return new ObjectId(value);
   } catch {
@@ -72,4 +73,4 @@ const isNonEmptyString = (value, minLength = 1, maxLength = Infinity) =>
 const isNonNegativeNumber = (value) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-module.exports = { toId, sanitizeUser, isNonEmptyString, isNonNegativeNumber };
+export { toId, sanitizeUser, isNonEmptyString, isNonNegativeNumber };

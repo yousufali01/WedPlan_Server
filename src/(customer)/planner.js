@@ -1,17 +1,14 @@
 /**
  * Planner routes — the signed-in user's Wedding Budget and Checklist.
  *
- * Data is stored in MongoDB (one document per user) so it follows the
- * account across browsers and devices. The frontend keeps a localStorage
- * copy only as an offline fallback / first-paint cache.
- *
- * Every document is keyed by `_id = <user id string>` which makes reads and
- * upserts race-free without needing an extra unique index.
+ * Data is stored in MongoDB (one document per user).
+ * The frontend keeps a localStorage copy only as an offline fallback.
  */
-const express = require("express");
 
-const { getDB } = require("../config/db");
-const { requireAuth } = require("../(auth)/middleware");
+import express from "express";
+
+import { getDB } from "../config/db.js";
+import { requireAuth } from "../(auth)/middleware.js";
 
 const router = express.Router();
 
@@ -29,7 +26,9 @@ const asNumber = (value, fallback = 0) => {
 
 const clampMoney = (value, fallback) => {
   const n = asNumber(value, fallback);
+
   if (n < 0) return 0;
+
   // Guards against absurd values blowing up the UI.
   return Math.min(n, 1_000_000_000_000);
 };
@@ -74,8 +73,12 @@ const sanitizeChecklist = (body) => {
 
   for (const [key, value] of Object.entries(source)) {
     if (count >= MAX_CHECKLIST_KEYS) break;
-    if (typeof key !== "string" || !key.trim() || key.length > MAX_ID_LENGTH) continue;
-    // Only boolean values are stored — truthy junk never reaches the DB.
+
+    if (typeof key !== "string" || !key.trim() || key.length > MAX_ID_LENGTH) {
+      continue;
+    }
+
+    // Only boolean values are stored.
     if (value === true || value === false) {
       done[key] = value;
       count++;
@@ -87,17 +90,21 @@ const sanitizeChecklist = (body) => {
 
 const loadDoc = async (req) => {
   const db = getDB();
+
   return db.collection("planner").findOne({ _id: userIdOf(req) });
 };
 
-/** GET /api/v1/planner — both planner documents for the current user. */
+/** GET /api/v1/planner */
 router.get("/", requireAuth, async (req, res, next) => {
   try {
     const doc = await loadDoc(req);
 
     res.status(200).json({
       success: true,
-      budget: doc?.budget || { totalBudget: DEFAULT_TOTAL_BUDGET, items: [] },
+      budget: doc?.budget || {
+        totalBudget: DEFAULT_TOTAL_BUDGET,
+        items: [],
+      },
       checklist: doc?.checklist || {},
     });
   } catch (error) {
@@ -112,7 +119,10 @@ router.get("/budget", requireAuth, async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      budget: doc?.budget || { totalBudget: DEFAULT_TOTAL_BUDGET, items: [] },
+      budget: doc?.budget || {
+        totalBudget: DEFAULT_TOTAL_BUDGET,
+        items: [],
+      },
     });
   } catch (error) {
     next(error);
@@ -132,7 +142,8 @@ router.get("/checklist", requireAuth, async (req, res, next) => {
     next(error);
   }
 });
-/** PUT /api/v1/planner/budget — replace the budget (upsert). */
+
+/** PUT /api/v1/planner/budget */
 router.put("/budget", requireAuth, async (req, res, next) => {
   try {
     const budget = sanitizeBudget(req.body);
@@ -140,7 +151,15 @@ router.put("/budget", requireAuth, async (req, res, next) => {
 
     await db.collection("planner").updateOne(
       { _id: userIdOf(req) },
-      { $set: { budget, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      {
+        $set: {
+          budget,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          createdAt: new Date(),
+        },
+      },
       { upsert: true },
     );
 
@@ -154,7 +173,7 @@ router.put("/budget", requireAuth, async (req, res, next) => {
   }
 });
 
-/** PUT /api/v1/planner/checklist — replace the done-map (upsert). */
+/** PUT /api/v1/planner/checklist */
 router.put("/checklist", requireAuth, async (req, res, next) => {
   try {
     const checklist = sanitizeChecklist(req.body);
@@ -162,7 +181,15 @@ router.put("/checklist", requireAuth, async (req, res, next) => {
 
     await db.collection("planner").updateOne(
       { _id: userIdOf(req) },
-      { $set: { checklist, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+      {
+        $set: {
+          checklist,
+          updatedAt: new Date(),
+        },
+        $setOnInsert: {
+          createdAt: new Date(),
+        },
+      },
       { upsert: true },
     );
 
@@ -176,4 +203,4 @@ router.put("/checklist", requireAuth, async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

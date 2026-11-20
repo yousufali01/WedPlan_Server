@@ -1,13 +1,22 @@
-require("dotenv").config();
+import "dotenv/config";
 
-const express = require("express");
-const cors = require("cors");
-const { toNodeHandler } = require("better-auth/node");
+import express from "express";
+import cors from "cors";
+import { toNodeHandler } from "better-auth/node";
+import { pathToFileURL } from "node:url";
 
-const { connectDB, getDB, getClient, closeDB } = require("./src/config/db");
+import { connectDB, getDB, getClient, closeDB } from "./src/config/db.js";
 
-const { ensureIndexes } = require("./src/config/indexes");
-const { initAuth, getAuth } = require("./src/(auth)/auth");
+import { ensureIndexes } from "./src/config/indexes.js";
+import { initAuth, getAuth } from "./src/(auth)/auth.js";
+
+// Routes
+import profileRoutes from "./src/(customer)/profile.js";
+import servicesRoutes from "./src/(public)/services.js";
+import bookingsRoutes from "./src/(customer)/bookings.js";
+import adminRoutes from "./src/(admin)/admin.js";
+import plannerRoutes from "./src/(customer)/planner.js";
+import subscriptionRoutes from "./src/(vendor)/subscription.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -166,24 +175,24 @@ app.get("/test-db", async (req, res, next) => {
 // ─────────────────────────────────────────────
 
 // Customer Profile
-app.use("/api/v1/profile", require("./src/(customer)/profile"));
+app.use("/api/v1/profile", profileRoutes);
 
 // Public Services
-app.use("/api/v1/services", require("./src/(public)/services"));
+app.use("/api/v1/services", servicesRoutes);
 
-app.use("/services", require("./src/(public)/services"));
+app.use("/services", servicesRoutes);
 
 // Customer Bookings
-app.use("/api/v1/bookings", require("./src/(customer)/bookings"));
+app.use("/api/v1/bookings", bookingsRoutes);
 
 // Admin Routes
-app.use("/api/v1/admin", require("./src/(admin)/admin"));
+app.use("/api/v1/admin", adminRoutes);
 
 // Customer Planner
-app.use("/api/v1/planner", require("./src/(customer)/planner"));
+app.use("/api/v1/planner", plannerRoutes);
 
 // Vendor Subscription
-app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
+app.use("/api/v1/subscription", subscriptionRoutes);
 
 // ─────────────────────────────────────────────
 // 404 HANDLER
@@ -224,7 +233,10 @@ app.use((error, req, res, next) => {
 // LOCAL SERVER
 // ─────────────────────────────────────────────
 
-if (require.main === module) {
+const isMainModule =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMainModule) {
   app.listen(PORT, () => {
     console.log(`WedPlan Server running on port ${PORT}`);
   });
@@ -249,4 +261,4 @@ if (require.main === module) {
 // VERCEL EXPORT
 // ─────────────────────────────────────────────
 
-module.exports = app;
+export default app;

@@ -5,16 +5,16 @@
  *  - Vendors see bookings for THEIR OWN services and can accept/reject pending ones.
  *  - Admins can view all bookings and update any booking status.
  */
-const express = require("express");
+import express from "express";
 
-const { getDB } = require("../config/db");
-const {
+import { getDB } from "../config/db.js";
+import {
   requireCustomer,
   requireVendor,
   requireAdmin,
   authenticateUser,
-} = require("../(auth)/middleware");
-const { toId, isNonEmptyString } = require("../utils/helpers");
+} from "../(auth)/middleware.js";
+import { toId, isNonEmptyString } from "../utils/helpers.js";
 
 const router = express.Router();
 
@@ -34,12 +34,14 @@ router.post("/", requireCustomer, async (req, res, next) => {
         .status(400)
         .json({ success: false, message: "serviceId is required." });
     }
+
     if (!isFutureDate(req.body.eventDate)) {
       return res.status(400).json({
         success: false,
         message: "eventDate is required and must be a valid future date.",
       });
     }
+
     if (
       req.body.guestCount !== undefined &&
       (!Number.isInteger(req.body.guestCount) || req.body.guestCount < 1)
@@ -54,15 +56,10 @@ router.post("/", requireCustomer, async (req, res, next) => {
 
     // Locate service by ID – support both Mongo ObjectId and raw string IDs (demo data).
     const serviceId = req.body.serviceId;
-    let service = await db
-      .collection("services")
-      .findOne({
-        $or: [
-          { _id: toId(serviceId) },
-          { _id: serviceId },
-        ],
-      });
- 
+    let service = await db.collection("services").findOne({
+      $or: [{ _id: toId(serviceId) }, { _id: serviceId }],
+    });
+
     if (!service) {
       return res.status(404).json({
         success: false,
@@ -77,7 +74,7 @@ router.post("/", requireCustomer, async (req, res, next) => {
       });
     }
 
-// Vendor resolution: ensure the service has a valid vendor association.
+    // Vendor resolution: ensure the service has a valid vendor association.
     // Use the vendorId stored on the service; if missing, and the requester is a vendor, assign that vendor.
     // Do not fall back to any approved vendor, as that misroutes bookings.
     let vendorIdStr = String(service.vendorId ?? "").trim();
@@ -103,15 +100,18 @@ router.post("/", requireCustomer, async (req, res, next) => {
           { _id: req.user.id },
         ],
       });
+
       if (vendor) {
-        vendorIdStr = vendor.id || (vendor._id && typeof vendor._id.toHexString === "function"
-          ? vendor._id.toHexString()
-          : String(vendor._id));
+        vendorIdStr =
+          vendor.id ||
+          (vendor._id && typeof vendor._id.toHexString === "function"
+            ? vendor._id.toHexString()
+            : String(vendor._id));
+
         // Persist resolved vendorId back to the service for future bookings.
-        await db.collection("services").updateOne(
-          { _id: service._id },
-          { $set: { vendorId: vendorIdStr } }
-        );
+        await db
+          .collection("services")
+          .updateOne({ _id: service._id }, { $set: { vendorId: vendorIdStr } });
       }
     }
 
@@ -119,7 +119,8 @@ router.post("/", requireCustomer, async (req, res, next) => {
     if (!vendor) {
       return res.status(400).json({
         success: false,
-        message: "The vendor for this service could not be found. Please ensure the service has a valid vendor.",
+        message:
+          "The vendor for this service could not be found. Please ensure the service has a valid vendor.",
       });
     }
 
@@ -134,15 +135,18 @@ router.post("/", requireCustomer, async (req, res, next) => {
     }
 
     const now = new Date();
+
     const result = await db.collection("bookings").insertOne({
       customerId,
       vendorId: vendorIdStr,
-      serviceId: service._id && typeof service._id.toHexString === "function"
-        ? service._id.toHexString()
-        : String(service._id),
+      serviceId:
+        service._id && typeof service._id.toHexString === "function"
+          ? service._id.toHexString()
+          : String(service._id),
       serviceName: service.name || service.title || "Wedding Service",
       servicePrice: service.price ?? 0,
-      serviceImage: service.image || (service.images && service.images[0]) || null,
+      serviceImage:
+        service.image || (service.images && service.images[0]) || null,
       serviceCategory: service.category || null,
       eventDate: req.body.eventDate.trim(),
       guestCount: req.body.guestCount ?? null,
@@ -169,14 +173,10 @@ router.post("/", requireCustomer, async (req, res, next) => {
 /** Customer booking view: only the booking owner or the owning vendor can see it. */
 const loadParticipantBooking = async (req, res) => {
   const db = getDB();
-  const booking = await db
-    .collection("bookings")
-    .findOne({
-      $or: [
-        { _id: toId(req.params.id) },
-        { _id: req.params.id },
-      ],
-    });
+
+  const booking = await db.collection("bookings").findOne({
+    $or: [{ _id: toId(req.params.id) }, { _id: req.params.id }],
+  });
 
   if (!booking) {
     res.status(404).json({ success: false, message: "Booking not found." });
@@ -206,10 +206,7 @@ router.get("/mine", requireCustomer, async (req, res, next) => {
     const customerIdStr = String(req.user.id ?? req.user._id ?? "");
 
     const query = {
-      $or: [
-        { customerId: customerIdStr },
-        { customerId: toId(customerIdStr) },
-      ],
+      $or: [{ customerId: customerIdStr }, { customerId: toId(customerIdStr) }],
     };
 
     // Optional status filter: ?status=pending|accepted|rejected|cancelled
@@ -227,16 +224,19 @@ router.get("/mine", requireCustomer, async (req, res, next) => {
     for (const booking of bookings) {
       if (!booking.serviceImage && booking.serviceId) {
         try {
-          const service = await db
-            .collection("services")
-            .findOne({
+          const service = await db.collection("services").findOne(
+            {
               $or: [
                 { _id: toId(booking.serviceId) },
                 { _id: booking.serviceId },
               ],
-            }, { projection: { image: 1, images: 1, category: 1 } });
+            },
+            { projection: { image: 1, images: 1, category: 1 } },
+          );
+
           if (service) {
-            booking.serviceImage = service.image || (service.images && service.images[0]) || null;
+            booking.serviceImage =
+              service.image || (service.images && service.images[0]) || null;
             booking.serviceCategory = service.category || null;
           }
         } catch {}
@@ -254,13 +254,11 @@ router.get("/vendor", requireVendor, async (req, res, next) => {
   try {
     const db = getDB();
     const vendorIdStr = String(req.user.id ?? req.user._id ?? "");
+
     const bookings = await db
       .collection("bookings")
       .find({
-        $or: [
-          { vendorId: vendorIdStr },
-          { vendorId: toId(vendorIdStr) },
-        ],
+        $or: [{ vendorId: vendorIdStr }, { vendorId: toId(vendorIdStr) }],
       })
       .sort({ createdAt: -1 })
       .toArray();
@@ -270,6 +268,7 @@ router.get("/vendor", requireVendor, async (req, res, next) => {
     const customerIds = [
       ...new Set(bookings.map((b) => String(b.customerId)).filter(Boolean)),
     ];
+
     const objectIds = customerIds
       .filter((id) => /^[a-f\d]{24}$/i.test(id))
       .map(toId);
@@ -291,9 +290,11 @@ router.get("/vendor", requireVendor, async (req, res, next) => {
 
     for (const booking of bookings) {
       const customer = customerMap.get(String(booking.customerId));
+
       booking.customerName = customer?.name || "Couple";
       booking.customerEmail = customer?.email || null;
       booking.customerImage = customer?.image || null;
+
       // `price` is the numeric alias the vendor UI reads.
       booking.price = Number(booking.servicePrice) || 0;
 
@@ -308,6 +309,7 @@ router.get("/vendor", requireVendor, async (req, res, next) => {
             },
             { projection: { name: 1, image: 1, images: 1, category: 1 } },
           );
+
           if (service) {
             booking.serviceImage = service.image || service.images?.[0] || null;
             booking.serviceCategory = service.category || null;
@@ -329,11 +331,13 @@ router.get("/", requireAdmin, async (req, res, next) => {
     const db = getDB();
 
     const query = {};
+
     if (req.query.status && BOOKING_STATUSES.includes(req.query.status)) {
       query.status = req.query.status;
     }
 
     const total = await db.collection("bookings").countDocuments(query);
+
     const bookings = await db
       .collection("bookings")
       .find(query)
@@ -366,6 +370,7 @@ router.patch("/:id/cancel", requireCustomer, async (req, res, next) => {
     if (!booking) return;
 
     const userId = String(req.user.id ?? req.user._id ?? "");
+
     if (String(booking.customerId) !== userId && req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
@@ -381,11 +386,12 @@ router.patch("/:id/cancel", requireCustomer, async (req, res, next) => {
     }
 
     const db = getDB();
+
     await db
       .collection("bookings")
       .updateOne(
         { _id: booking._id },
-        { $set: { status: "cancelled", updatedAt: new Date() } }
+        { $set: { status: "cancelled", updatedAt: new Date() } },
       );
 
     res.status(200).json({
@@ -413,7 +419,8 @@ router.patch("/:id/status", authenticateUser, async (req, res, next) => {
     if (!booking) return;
 
     const userId = String(req.user.id ?? req.user._id ?? "");
-    const isVendor = req.user.role === "vendor" && String(booking.vendorId) === userId;
+    const isVendor =
+      req.user.role === "vendor" && String(booking.vendorId) === userId;
     const isAdmin = req.user.role === "admin";
 
     if (!isVendor && !isAdmin) {
@@ -432,6 +439,7 @@ router.patch("/:id/status", authenticateUser, async (req, res, next) => {
           message: "Vendors can only accept or reject bookings.",
         });
       }
+
       if (booking.status !== "pending") {
         return res.status(400).json({
           success: false,
@@ -441,11 +449,12 @@ router.patch("/:id/status", authenticateUser, async (req, res, next) => {
     }
 
     const db = getDB();
+
     await db
       .collection("bookings")
       .updateOne(
         { _id: booking._id },
-        { $set: { status, updatedAt: new Date() } }
+        { $set: { status, updatedAt: new Date() } },
       );
 
     res.status(200).json({
@@ -457,4 +466,4 @@ router.patch("/:id/status", authenticateUser, async (req, res, next) => {
   }
 });
 
-module.exports = router;
+export default router;

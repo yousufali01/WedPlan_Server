@@ -8,12 +8,12 @@
  * - Roles and vendor approval are always read from MongoDB.
  */
 
-const { fromNodeHeaders } = require("better-auth/node");
-const { createRemoteJWKSet, jwtVerify } = require("jose");
+import { fromNodeHeaders } from "better-auth/node";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
-const { getAuth } = require("./auth");
-const { getDB } = require("../config/db");
-const { sanitizeUser, toId } = require("../utils/helpers");
+import { getAuth } from "./auth.js";
+import { getDB } from "../config/db.js";
+import { sanitizeUser, toId } from "../utils/helpers.js";
 
 let jwks = null;
 
@@ -108,10 +108,7 @@ const authenticateUser = async (req, res, next) => {
     const db = getDB();
 
     const query = {
-      $or: [
-        { _id: toId(userId) },
-        { id: String(userId) },
-      ],
+      $or: [{ _id: toId(userId) }, { id: String(userId) }],
     };
 
     const dbUser = await db.collection("user").findOne(query);
@@ -190,7 +187,7 @@ const requireVendor = [
 
 const requireAdmin = [authenticateUser, requireRole("admin")];
 
-module.exports = {
+export {
   isUserBlocked,
   authenticateUser,
   requireRole,
