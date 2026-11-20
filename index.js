@@ -1,13 +1,15 @@
 // ───────────────────────────────────────────────────────────────────────
-// wedplan-server/index.js
+// WedPlan Server - Main Entry Point
 // ───────────────────────────────────────────────────────────────────────
+
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
 const { toNodeHandler } = require("better-auth/node");
 
-const { connectDB, getDB, getClient } = require("./src/config/db");
+const { connectDB, getDB, getClient, closeDB } = require("./src/config/db");
+
 const { ensureIndexes } = require("./src/config/indexes");
 const { initAuth, getAuth } = require("./src/(auth)/auth");
 
@@ -15,33 +17,45 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ───────────────────────────────────────────────────────────────────────
-// CORS configuration – include the Vercel client URL
+// CORS Configuration
 // ───────────────────────────────────────────────────────────────────────
+
 const allowedOrigins = [
   process.env.FRONTEND_URL,
+  process.env.VERCEL_CLIENT_URL,
+  "https://wedplan-client-rho.vercel.app",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  // optional: Vercel client URL (keeps the whitelist explicit)
-  process.env.VERCEL_CLIENT_URL || "https://wedplan-client-rho.vercel.app",
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header (e.g. server-to-server)
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.error("CORS blocked origin:", origin);
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+
+  credentials: true,
+
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+
+  optionsSuccessStatus: 204,
+};
+
+// CORS must run before every route and Better Auth handler.
+app.use(cors(corsOptions));
 
 // ───────────────────────────────────────────────────────────────────────
-// Simple, unauthenticated routes (always available)
+// Basic Server Routes
 // ───────────────────────────────────────────────────────────────────────
+
 app.get("/", (req, res) => {
   res.status(200).send("Welcome to WedPlan Server!");
 });
@@ -54,8 +68,10 @@ app.get("/health", (req, res) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Server/DB initialisation – runs only once per Vercel instance
+// Server & Database Initialization
+// Runs once per Vercel instance
 // ───────────────────────────────────────────────────────────────────────
+
 let initializationPromise = null;
 let initialized = false;
 
@@ -66,21 +82,24 @@ const initializeApp = async () => {
     initializationPromise = (async () => {
       console.log("Initializing WedPlan Server...");
 
-      // 1️⃣ Connect to MongoDB
+      // 1. Connect to MongoDB
       const db = await connectDB();
 
-      // 2️⃣ Initialise Better-Auth (uses the shared MongoDB client)
+      // 2. Initialize Better Auth using shared MongoDB client
       initAuth(db, getClient());
 
-      // 3️⃣ Ensure our DB indexes exist
+      // 3. Ensure database indexes
       await ensureIndexes(db);
 
       initialized = true;
+
       console.log("WedPlan Server initialized successfully.");
     })().catch((error) => {
       console.error("WedPlan Initialization Failed:", error);
+
       initialized = false;
-      initializationPromise = null; // allow a retry on next request
+      initializationPromise = null;
+
       throw error;
     });
   }
@@ -88,13 +107,18 @@ const initializeApp = async () => {
   return initializationPromise;
 };
 
-// Middleware that guarantees the above has completed before any API route runs
+// ───────────────────────────────────────────────────────────────────────
+// Initialization Middleware
+// Ensures DB and Better Auth are ready before API requests
+// ───────────────────────────────────────────────────────────────────────
+
 app.use(async (req, res, next) => {
   try {
     await initializeApp();
     next();
   } catch (error) {
     console.error("Request Initialization Error:", error.message);
+
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
@@ -105,11 +129,14 @@ app.use(async (req, res, next) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Better-Auth handler – must stay **before** `express.json()`
+// Better Auth Handler
+// Must stay before express.json()
 // ───────────────────────────────────────────────────────────────────────
+
 app.all("/api/auth/{*splat}", (req, res, next) => {
   try {
     const authHandler = toNodeHandler(getAuth());
+
     return authHandler(req, res, next);
   } catch (error) {
     return next(error);
@@ -117,17 +144,21 @@ app.all("/api/auth/{*splat}", (req, res, next) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Body parser (JSON)
+// JSON Body Parser
 // ───────────────────────────────────────────────────────────────────────
+
 app.use(express.json());
 
 // ───────────────────────────────────────────────────────────────────────
-// Simple DB health check (useful while debugging)
+// Database Health Check
 // ───────────────────────────────────────────────────────────────────────
+
 app.get("/test-db", async (req, res, next) => {
   try {
     const database = getDB();
+
     await database.command({ ping: 1 });
+
     res.status(200).json({
       success: true,
       message: "MongoDB Connected Successfully!",
@@ -139,19 +170,33 @@ app.get("/test-db", async (req, res, next) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// API routes (protected by the init‑middleware above)
+// API Routes
 // ───────────────────────────────────────────────────────────────────────
+
+// Customer Profile
 app.use("/api/v1/profile", require("./src/(customer)/profile"));
+
+// Public Services
 app.use("/api/v1/services", require("./src/(public)/services"));
+
 app.use("/services", require("./src/(public)/services"));
+
+// Customer Bookings
 app.use("/api/v1/bookings", require("./src/(customer)/bookings"));
+
+// Admin Routes
 app.use("/api/v1/admin", require("./src/(admin)/admin"));
+
+// Customer Planner
 app.use("/api/v1/planner", require("./src/(customer)/planner"));
+
+// Vendor Subscription
 app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
 
 // ───────────────────────────────────────────────────────────────────────
-// 404 handler
+// 404 Handler
 // ───────────────────────────────────────────────────────────────────────
+
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -160,18 +205,22 @@ app.use((req, res) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Central error handler (no stack leaks)
+// Central Error Handler
 // ───────────────────────────────────────────────────────────────────────
+
 app.use((error, req, res, next) => {
   console.error("WedPlan API Error:", error);
-  if (res.headersSent) return next(error);
+
+  if (res.headersSent) {
+    return next(error);
+  }
 
   const status =
     typeof error?.status === "number"
       ? error.status
       : typeof error?.statusCode === "number"
-      ? error.statusCode
-      : 500;
+        ? error.statusCode
+        : 500;
 
   res.status(status).json({
     success: false,
@@ -180,8 +229,10 @@ app.use((error, req, res, next) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Local dev server (Vercel ignores this, but it’s handy for `npm run dev`)
+// Local Development Server
+// Vercel uses the exported Express instance
 // ───────────────────────────────────────────────────────────────────────
+
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`WedPlan Server running on port ${PORT}`);
@@ -189,12 +240,14 @@ if (require.main === module) {
 
   const shutdown = async () => {
     console.log("Shutting down WedPlan Server...");
-    const { closeDB } = require("./src/config/db");
+
     try {
       await closeDB();
+
       process.exit(0);
     } catch (error) {
       console.error("Shutdown Error:", error);
+
       process.exit(1);
     }
   };
@@ -203,5 +256,8 @@ if (require.main === module) {
   process.on("SIGTERM", shutdown);
 }
 
-// Vercel expects the exported Express instance
+// ───────────────────────────────────────────────────────────────────────
+// Export Express App for Vercel
+// ───────────────────────────────────────────────────────────────────────
+
 module.exports = app;
