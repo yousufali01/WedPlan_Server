@@ -50,7 +50,14 @@ const corsOptions = {
 };
 
 // CORS must run before every route and Better Auth handler.
-app.use(cors(corsOptions));
+app.use(cors({
+  origin: ["http://localhost:3000", process.env.FRONTEND_URL, process.env.VERCEL_CLIENT_URL].filter(Boolean),
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 204,
+  credentials: true,
+}))
 
 // ───────────────────────────────────────────────────────────────────────
 // Basic Server Routes
