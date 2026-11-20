@@ -1,17 +1,10 @@
-
 /**
  * Better Auth configuration for WedPlan.
  *
- * Reuses the existing MongoDB connection created in src/config/db.js.
- * No new MongoClient is created here.
+ * Uses the existing MongoDB connection.
+ * Authentication is handled ONLY by Express Backend.
  *
- * Roles: customer (default) | vendor | admin
- *
- * - New users are always "customer".
- * - Frontend cannot assign privileged roles.
- * - Vendor/admin roles are granted only through protected admin APIs
- *   or the protected create-admin script.
- * - vendorApproved is controlled by admins.
+ * Roles: customer | vendor | admin
  */
 
 const { betterAuth } = require("better-auth");
@@ -20,108 +13,80 @@ const { admin, jwt } = require("better-auth/plugins");
 
 const ROLES = ["customer", "vendor", "admin"];
 
-// ───────────────────────────────────────────────────────────────────────
+let auth = null;
+
+// ─────────────────────────────────────────────
 // Environment Validation
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
 
 const validateEnv = () => {
-  const missing = [];
+  const required = ["BETTER_AUTH_SECRET", "BETTER_AUTH_URL", "FRONTEND_URL"];
 
-  if (!process.env.BETTER_AUTH_SECRET) {
-    missing.push("BETTER_AUTH_SECRET");
+  const missing = required.filter((key) => !process.env[key]);
+
+  if (missing.length) {
+    throw new Error(`Missing environment variables: ${missing.join(", ")}`);
   }
 
-  if (!process.env.BETTER_AUTH_URL) {
-    missing.push("BETTER_AUTH_URL");
-  }
-
-  if (missing.length > 0) {
+  if (process.env.BETTER_AUTH_SECRET === process.env.GOOGLE_CLIENT_SECRET) {
     throw new Error(
-      `Missing required environment variable(s): ${missing.join(", ")}. ` +
-        "Please configure them in your environment variables."
-    );
-  }
-
-  if (
-    process.env.BETTER_AUTH_SECRET ===
-    process.env.GOOGLE_CLIENT_SECRET
-  ) {
-    throw new Error(
-      "BETTER_AUTH_SECRET must NOT be the same as GOOGLE_CLIENT_SECRET."
+      "BETTER_AUTH_SECRET and GOOGLE_CLIENT_SECRET must be different.",
     );
   }
 };
 
-// ───────────────────────────────────────────────────────────────────────
-// Auth Instance
-// ───────────────────────────────────────────────────────────────────────
-
-let auth = null;
-
-/**
- * Creates the Better Auth instance using the existing MongoDB connection.
- *
- * @param {import("mongodb").Db} db
- * @param {import("mongodb").MongoClient} client
- */
+// ─────────────────────────────────────────────
+// Initialize Auth
+// ─────────────────────────────────────────────
 
 const initAuth = (db, client) => {
   if (auth) return auth;
 
   if (!db || !client) {
     throw new Error(
-      "MongoDB database or client is missing during Better Auth initialization."
+      "MongoDB database/client missing during Better Auth initialization.",
     );
   }
 
   validateEnv();
 
-  auth = betterAuth({
-    // ─────────────────────────────────────────────────────────────────
-    // MongoDB Adapter - Shared Existing Connection
-    // ─────────────────────────────────────────────────────────────────
+  const trustedOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.VERCEL_CLIENT_URL,
+    "https://wedplan-client-rho.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ].filter(Boolean);
 
+  auth = betterAuth({
     database: mongodbAdapter(db, {
       client,
-      transaction: true,
+      transaction: false,
     }),
 
     baseURL: process.env.BETTER_AUTH_URL,
     secret: process.env.BETTER_AUTH_SECRET,
 
-    // ─────────────────────────────────────────────────────────────────
-    // Trusted Origins
-    // ─────────────────────────────────────────────────────────────────
+    trustedOrigins,
+    advanced: {
+      defaultCookieAttributes: {
+        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
 
-    trustedOrigins: [
-      process.env.FRONTEND_URL,
-      process.env.VERCEL_CLIENT_URL,
-      "https://wedplan-client-rho.vercel.app",
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-    ].filter(Boolean),
+        secure: process.env.NODE_ENV === "production",
 
-    // ─────────────────────────────────────────────────────────────────
-    // Email & Password Authentication
-    // ─────────────────────────────────────────────────────────────────
+        httpOnly: true,
+      },
+    },
 
     emailAndPassword: {
       enabled: true,
       minPasswordLength: 8,
     },
 
-    // ─────────────────────────────────────────────────────────────────
-    // Session Configuration
-    // ─────────────────────────────────────────────────────────────────
-
     session: {
       expiresIn: 60 * 60 * 24 * 7,
       updateAge: 60 * 60 * 24,
     },
-
-    // ─────────────────────────────────────────────────────────────────
-    // Additional User Fields
-    // ─────────────────────────────────────────────────────────────────
 
     user: {
       additionalFields: {
@@ -170,10 +135,6 @@ const initAuth = (db, client) => {
       },
     },
 
-    // ─────────────────────────────────────────────────────────────────
-    // Google Authentication
-    // ─────────────────────────────────────────────────────────────────
-
     socialProviders: {
       google: {
         clientId: process.env.GOOGLE_CLIENT_ID,
@@ -181,16 +142,11 @@ const initAuth = (db, client) => {
       },
     },
 
-    // ─────────────────────────────────────────────────────────────────
-    // Plugins
-    // ─────────────────────────────────────────────────────────────────
-
     plugins: [
       admin({
         defaultRole: "customer",
         adminRoles: ["admin"],
       }),
-
       jwt(),
     ],
   });
@@ -198,23 +154,17 @@ const initAuth = (db, client) => {
   return auth;
 };
 
-// ───────────────────────────────────────────────────────────────────────
-// Get Auth Instance
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Get Auth
+// ─────────────────────────────────────────────
 
 const getAuth = () => {
   if (!auth) {
-    throw new Error(
-      "Better Auth is not initialized! Make sure initAuth(db, client) runs after connectDB()."
-    );
+    throw new Error("Better Auth is not initialized. Call initAuth() first.");
   }
 
   return auth;
 };
-
-// ───────────────────────────────────────────────────────────────────────
-// Exports
-// ───────────────────────────────────────────────────────────────────────
 
 module.exports = {
   initAuth,

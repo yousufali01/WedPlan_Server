@@ -1,7 +1,3 @@
-// ───────────────────────────────────────────────────────────────────────
-// WedPlan Server - Main Entry Point
-// ───────────────────────────────────────────────────────────────────────
-
 require("dotenv").config();
 
 const express = require("express");
@@ -16,9 +12,9 @@ const { initAuth, getAuth } = require("./src/(auth)/auth");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ───────────────────────────────────────────────────────────────────────
-// CORS Configuration
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// CORS CONFIGURATION
+// ─────────────────────────────────────────────
 
 const allowedOrigins = [
   process.env.FRONTEND_URL,
@@ -30,7 +26,6 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests without an Origin header (e.g. server-to-server)
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
@@ -49,19 +44,11 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// CORS must run before every route and Better Auth handler.
-app.use(cors({
-  origin: ["http://localhost:3000", process.env.FRONTEND_URL, process.env.VERCEL_CLIENT_URL].filter(Boolean),
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  optionsSuccessStatus: 204,
-  credentials: true,
-}))
+app.use(cors(corsOptions));
 
-// ───────────────────────────────────────────────────────────────────────
-// Basic Server Routes
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// BASIC ROUTES
+// ─────────────────────────────────────────────
 
 app.get("/", (req, res) => {
   res.status(200).send("Welcome to WedPlan Server!");
@@ -74,10 +61,9 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// Server & Database Initialization
-// Runs once per Vercel instance
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// DATABASE & AUTH INITIALIZATION
+// ─────────────────────────────────────────────
 
 let initializationPromise = null;
 let initialized = false;
@@ -89,10 +75,10 @@ const initializeApp = async () => {
     initializationPromise = (async () => {
       console.log("Initializing WedPlan Server...");
 
-      // 1. Connect to MongoDB
+      // 1. Connect MongoDB
       const db = await connectDB();
 
-      // 2. Initialize Better Auth using shared MongoDB client
+      // 2. Initialize Better Auth
       initAuth(db, getClient());
 
       // 3. Ensure database indexes
@@ -114,17 +100,16 @@ const initializeApp = async () => {
   return initializationPromise;
 };
 
-// ───────────────────────────────────────────────────────────────────────
-// Initialization Middleware
-// Ensures DB and Better Auth are ready before API requests
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// INITIALIZATION MIDDLEWARE
+// ─────────────────────────────────────────────
 
 app.use(async (req, res, next) => {
   try {
     await initializeApp();
     next();
   } catch (error) {
-    console.error("Request Initialization Error:", error.message);
+    console.error("Request Initialization Error:", error);
 
     if (!res.headersSent) {
       res.status(500).json({
@@ -135,10 +120,10 @@ app.use(async (req, res, next) => {
   }
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// Better Auth Handler
-// Must stay before express.json()
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// BETTER AUTH HANDLER
+// Must be before express.json()
+// ─────────────────────────────────────────────
 
 app.all("/api/auth/{*splat}", (req, res, next) => {
   try {
@@ -150,15 +135,15 @@ app.all("/api/auth/{*splat}", (req, res, next) => {
   }
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// JSON Body Parser
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// JSON BODY PARSER
+// ─────────────────────────────────────────────
 
 app.use(express.json());
 
-// ───────────────────────────────────────────────────────────────────────
-// Database Health Check
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// DATABASE HEALTH CHECK
+// ─────────────────────────────────────────────
 
 app.get("/test-db", async (req, res, next) => {
   try {
@@ -176,9 +161,9 @@ app.get("/test-db", async (req, res, next) => {
   }
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// API Routes
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// API ROUTES
+// ─────────────────────────────────────────────
 
 // Customer Profile
 app.use("/api/v1/profile", require("./src/(customer)/profile"));
@@ -200,9 +185,9 @@ app.use("/api/v1/planner", require("./src/(customer)/planner"));
 // Vendor Subscription
 app.use("/api/v1/subscription", require("./src/(vendor)/subscription"));
 
-// ───────────────────────────────────────────────────────────────────────
-// 404 Handler
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// 404 HANDLER
+// ─────────────────────────────────────────────
 
 app.use((req, res) => {
   res.status(404).json({
@@ -211,9 +196,9 @@ app.use((req, res) => {
   });
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// Central Error Handler
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// CENTRAL ERROR HANDLER
+// ─────────────────────────────────────────────
 
 app.use((error, req, res, next) => {
   console.error("WedPlan API Error:", error);
@@ -235,10 +220,9 @@ app.use((error, req, res, next) => {
   });
 });
 
-// ───────────────────────────────────────────────────────────────────────
-// Local Development Server
-// Vercel uses the exported Express instance
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// LOCAL SERVER
+// ─────────────────────────────────────────────
 
 if (require.main === module) {
   app.listen(PORT, () => {
@@ -250,11 +234,9 @@ if (require.main === module) {
 
     try {
       await closeDB();
-
       process.exit(0);
     } catch (error) {
       console.error("Shutdown Error:", error);
-
       process.exit(1);
     }
   };
@@ -263,8 +245,8 @@ if (require.main === module) {
   process.on("SIGTERM", shutdown);
 }
 
-// ───────────────────────────────────────────────────────────────────────
-// Export Express App for Vercel
-// ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// VERCEL EXPORT
+// ─────────────────────────────────────────────
 
 module.exports = app;
