@@ -1,30 +1,29 @@
 # 💍 WedPlan – Backend API
 
-<p align="center">
+**Powering the WedPlan Wedding Service Marketplace**
 
-  **Powering the WedPlan Wedding Service Marketplace**
-
-  A secure and scalable RESTful backend API for managing wedding services, customers, vendors, bookings, authentication, and payments.
-
-</p>
+A secure RESTful backend API for managing wedding services, customers, vendors, bookings, authentication, subscriptions, and payments.
 
 ---
 
-## 🌐 Project Overview
+## 📖 About WedPlan Backend
 
-**WedPlan Server** is the backend application of the WedPlan Wedding Service Marketplace.
+WedPlan Server is the backend application of the WedPlan Wedding Service Marketplace.
 
-It provides RESTful APIs to support the complete marketplace functionality, including user authentication, role-based authorization, wedding service management, booking operations, vendor management, and secure online payments.
+It provides RESTful APIs to support the platform's core functionality, including authentication, role-based authorization, wedding service management, booking operations, vendor management, subscription handling, and secure payment processing.
 
-The backend is developed using **Node.js, Express.js, and MongoDB**, with Better Auth for authentication, JWT for API authorization, and Stripe for payment processing.
+The backend is developed using **Node.js, Express.js, and MongoDB**, with **Better Auth** for authentication, JWT-based authorization, and **Stripe** for payment processing.
 
-The system follows a role-based architecture with three primary user roles: Customer, Vendor, and Admin.
+The platform supports three primary user roles:
 
----
+- Customer
+- Vendor
+- Admin
 
 ## ✨ Key Features
 
 ### 🔐 Authentication & Authorization
+
 - Email and password authentication.
 - Google OAuth integration.
 - Better Auth integration.
@@ -33,20 +32,21 @@ The system follows a role-based architecture with three primary user roles: Cust
 - Role-based access control.
 - Protected API endpoints.
 - Server-side user authorization.
-- Vendor and admin permission management.
 - Ownership verification for protected resources.
 
 ### 👤 User Management
+
 - User registration and authentication.
 - User profile management.
 - Customer and vendor role management.
 - Retrieve user information.
 - Admin user management.
-- Blocked user access control.
+- User access management.
 
 ### 🏪 Wedding Service Management
-- Create new wedding services.
-- Retrieve all available services.
+
+- Create wedding services.
+- Retrieve available services.
 - Retrieve individual service details.
 - Update existing services.
 - Delete services.
@@ -57,17 +57,18 @@ The system follows a role-based architecture with three primary user roles: Cust
 - Pending and approved service status management.
 
 ### 📅 Booking Management
-- Create service bookings.
+
+- Create service booking requests.
 - Retrieve customer bookings.
 - Retrieve vendor booking requests.
 - Accept or reject booking requests.
-- Cancel bookings.
+- Cancel pending bookings.
 - Update booking statuses.
 - Prevent duplicate bookings.
 - Prevent vendors from booking their own services.
 - Verify booking ownership and permissions.
 
-**Booking Statuses:**
+**Booking Statuses**
 
 | Status | Description |
 |---|---|
@@ -77,98 +78,103 @@ The system follows a role-based architecture with three primary user roles: Cust
 | Cancelled | Booking cancelled |
 
 ### 💎 Subscription Management
+
 - Free and Premium vendor plans.
 - Free vendors can maintain a maximum of 3 active services.
 - Premium vendors can maintain unlimited active services.
-- Subscription and payment management.
+- Monthly and yearly subscription plans.
+- Subscription status management.
+- Premium vendor badge support.
 
 ### 💳 Payment & Transaction Management
+
 - Stripe Checkout integration.
 - Secure payment session creation.
-- Stripe webhook verification.
+- Stripe webhook integration.
+- Webhook signature verification.
 - Payment status verification.
 - Transaction record management.
-- Booking payment expiration handling.
-- Payment cancellation and failure handling.
-- Prevent duplicate payment processing.
+- Payment failure and cancellation handling.
+- Protection against duplicate payment processing.
 
 ### 🛡️ Security & Validation
+
 - JWT verification middleware.
 - Role-based authorization middleware.
 - Resource ownership validation.
-- Secure authentication handling.
-- Server-side request validation.
 - Protected administrative endpoints.
+- Server-side request validation.
 - Stripe webhook signature verification.
-- Error handling and API response management.
-
----
+- Centralized error handling.
+- Environment-based configuration.
 
 ## 🛠️ Technology Stack
 
 | Technology | Purpose |
 |---|---|
-| Node.js | JavaScript Runtime |
-| Express.js | Backend Framework |
-| MongoDB | NoSQL Database |
+| Node.js | JavaScript runtime |
+| Express.js 5 | Backend framework |
+| MongoDB | NoSQL database |
 | Better Auth | Authentication |
-| JWT | API Authorization |
-| JOSE | JWT Verification |
-| Stripe | Payment Processing |
-| ImgBB | Image Hosting |
-| CORS | Cross-Origin Resource Sharing |
-| dotenv | Environment Configuration |
+| JWT | API authorization |
+| JOSE | JWT verification |
+| Stripe | Payment processing |
+| ImgBB | Image hosting |
+| CORS | Cross-origin resource sharing |
+| dotenv | Environment configuration |
+| Nodemon | Development server |
 
----
-
-## 📁 Project Structure
+## 🏗️ Project Structure
 
 ```text
-WedPlan-Server/
+WedPlan_Server/
+│
+├── scripts/
+│   ├── create-admin.js
+│   └── smoke-test.js
 │
 ├── src/
 │   ├── config/
+│   │   ├── db.js
+│   │   └── indexes.js
+│   │
+│   ├── (auth)/
+│   │   └── auth.js
 │   │
 │   ├── middleware/
-│   │   ├── auth.middleware.js
-│   │   └── role.middleware.js
-│   │
 │   ├── routes/
-│   │   ├── auth.routes.js
-│   │   ├── user.routes.js
-│   │   ├── service.routes.js
-│   │   ├── booking.routes.js
-│   │   ├── admin.routes.js
-│   │   ├── payment.routes.js
-│   │   └── transaction.routes.js
-│   │
-│   ├── utils/
-│   │
-│   └── app.js
+│   └── utils/
 │
-├── .env
-├── .gitignore
+├── index.js
 ├── package.json
-├── server.js
+├── package-lock.json
+├── vercel.json
+├── .gitignore
 └── README.md
 ```
 
-*Note: This is a suggested structure. Adjust it to match the actual backend implementation.*
-
----
+*Note: This is a simplified overview. Refer to the repository for the complete source structure.*
 
 ## ⚙️ Installation & Setup
+
+### Prerequisites
+
+- Node.js
+- npm
+- MongoDB Atlas account or local MongoDB
+- Stripe account for payment testing
+- Google Cloud project for Google OAuth
 
 ### 1. Clone the Repository
 
 ```bash
-git clone YOUR_BACKEND_REPOSITORY_URL
+git clone https://github.com/yousufali01/WedPlan_Server.git
 ```
 
 ### 2. Navigate to the Project
 
 ```bash
-cd WedPlan-Server
+cd WedPlan_Server
 ```
 
 ### 3. Install Dependencies
@@ -179,168 +185,219 @@ npm install
 
 ### 4. Configure Environment Variables
 
-Create a `.env` file in the root directory.
+Create a `.env` file in the backend root directory.
 
 ```env
+# ==========================================
+# SERVER CONFIGURATION
+# ==========================================
 PORT=5000
 
-MONGODB_URI=your_mongodb_connection_string
+# ==========================================
+# MONGODB CONFIGURATION
+# ==========================================
+DB_USER=WedPlan
+DB_PASSWORD=your_mongodb_password
+DB_URI=your_mongodb_connection_uri
+DB_NAME=WedPlan
 
+# ==========================================
+# BETTER AUTH CONFIGURATION
+# ==========================================
 BETTER_AUTH_SECRET=your_better_auth_secret
 BETTER_AUTH_URL=http://localhost:5000
 
 FRONTEND_URL=http://localhost:3000
 
+# ==========================================
+# GOOGLE AUTHENTICATION
+# ==========================================
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 
+# ==========================================
+# ADMIN CONFIGURATION
+# ==========================================
+ADMIN_NAME=WedPlan Admin
+ADMIN_EMAIL=your_admin_email
+ADMIN_PASSWORD=your_admin_password
+
+# ==========================================
+# IMAGE UPLOAD
+# ==========================================
+NEXT_PUBLIC_IMGBB_API_KEY=your_imgbb_api_key
+
+# ==========================================
+# STRIPE CONFIGURATION
+# ==========================================
 STRIPE_SECRET_KEY=your_stripe_secret_key
+STRIPE_PUBLISHABLE_KEY=your_stripe_publishable_key
 STRIPE_WEBHOOK_SECRET=your_stripe_webhook_secret
 
-IMGBB_API_KEY=your_imgbb_api_key
+STRIPE_MONTHLY_PRICE=29
+STRIPE_YEARLY_PRICE=290
+
+# ==========================================
+# CLIENT URL
+# ==========================================
+CLIENT_URL=http://localhost:3000
 ```
 
-**Important:** Configure environment variable names according to the actual application configuration. Never commit `.env` files, API keys, or secret credentials to GitHub.
+For production, configure the deployed URLs:
 
-### 5. Start the Development Server
+```env
+BETTER_AUTH_URL=https://wedplan-server-seven.vercel.app
+FRONTEND_URL=https://wedplan-client-rho.vercel.app
+CLIENT_URL=https://wedplan-client-rho.vercel.app
+```
+
+### 5. Environment Variables Description
+
+| Variable | Description |
+|---|---|
+| `PORT` | Backend server port |
+| `DB_USER` | MongoDB database username |
+| `DB_PASSWORD` | MongoDB database password |
+| `DB_URI` | MongoDB connection URI |
+| `DB_NAME` | MongoDB database name |
+| `BETTER_AUTH_SECRET` | Better Auth secret key |
+| `BETTER_AUTH_URL` | Backend authentication URL |
+| `FRONTEND_URL` | Frontend application URL |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `ADMIN_NAME` | Default admin name |
+| `ADMIN_EMAIL` | Admin account email |
+| `ADMIN_PASSWORD` | Admin account password |
+| `NEXT_PUBLIC_IMGBB_API_KEY` | ImgBB API key |
+| `STRIPE_SECRET_KEY` | Stripe secret key |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
+| `STRIPE_MONTHLY_PRICE` | Monthly subscription price |
+| `STRIPE_YEARLY_PRICE` | Yearly subscription price |
+| `CLIENT_URL` | Frontend redirect URL |
+
+**Security:** Replace placeholder values with your own credentials. Never commit `.env` or expose private credentials in GitHub.
+
+### 6. Run the Development Server
 
 ```bash
 npm run dev
 ```
 
-The backend API will run at:
+The backend will run at:
 
 ```text
 http://localhost:5000
 ```
 
----
+## 📜 Available Scripts
 
-## 🔗 API Endpoints
-
-The following endpoints represent the planned API organization.
-
-### Authentication
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/auth/*` | Better Auth authentication handlers |
-| POST | `/api/auth/*` | Authentication operations |
-
-### Services
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/services` | Get all services |
-| GET | `/api/services/:id` | Get service details |
-| POST | `/api/services` | Create a service |
-| PATCH | `/api/services/:id` | Update a service |
-| DELETE | `/api/services/:id` | Delete a service |
-
-### Bookings
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/bookings` | Get bookings |
-| POST | `/api/bookings` | Create a booking |
-| PATCH | `/api/bookings/:id` | Update booking status |
-| DELETE | `/api/bookings/:id` | Cancel or delete a booking |
-
-### Users
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/users` | Get users |
-| GET | `/api/users/:id` | Get user details |
-| PATCH | `/api/users/:id` | Update user information |
-
-### Admin
-
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/admin/services` | Get services for review |
-| PATCH | `/api/admin/services/:id` | Approve or reject a service |
-
-### Payments & Transactions
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/payments/checkout` | Create Stripe Checkout session |
-| POST | `/api/payments/webhook` | Handle Stripe webhook events |
-| GET | `/api/transactions` | Retrieve transactions |
-
-*Note: These are proposed endpoint conventions. Match the methods and paths to the implemented Express routes before publishing.*
-
----
-
-## 🗄️ Database Architecture
-
-WedPlan uses MongoDB to store and manage marketplace data.
-
-**Primary Collections:**
-
-| Collection | Purpose |
+| Command | Description |
 |---|---|
-| Users | Customer, Vendor and Admin information |
-| Services | Wedding service information |
-| Bookings | Customer booking records |
+| `npm run dev` | Start the development server with Nodemon |
+| `npm start` | Start the production server |
+| `npm run create-admin` | Run the admin creation script |
+| `npm run smoke-test` | Run the backend smoke test |
+| `npm test` | Not configured as a test suite yet |
+
+## 🔗 API Modules
+
+The backend provides API functionality for the following modules:
+
+| Module | Main Operations |
+|---|---|
+| Authentication | Sign up, sign in, session handling |
+| Users | User and profile management |
+| Services | Create, read, update, delete, search, and approval |
+| Bookings | Create, view, update status, and cancel |
+| Vendors | Vendor profile and service management |
+| Admin | User and service administration |
+| Payments | Stripe Checkout and payment verification |
+| Subscriptions | Free and Premium plan management |
 | Transactions | Payment and transaction records |
 
-The database architecture supports role-based access, booking relationships, service ownership, and payment tracking.
+Refer to the route files in the repository for the exact endpoint paths and HTTP methods.
 
----
+## 💳 Stripe Configuration
 
-## 🔄 Application Workflow
+WedPlan uses Stripe to process vendor subscription payments.
 
-1. A user registers or signs in using Better Auth.
-2. The backend authenticates the user and provides the required authentication credentials.
-3. The user accesses features according to their assigned role.
-4. Vendors create wedding services and submit them for approval.
-5. Administrators review and approve submitted services.
-6. Customers browse available services and create bookings.
-7. Vendors manage incoming booking requests.
-8. Customers complete payments through Stripe.
-9. Verified payment events update the relevant transaction and booking records.
+Setup:
 
----
+1. Create a Stripe account.
+2. Enable Test Mode.
+3. Get your API keys from the Stripe Dashboard.
+4. Add the Secret Key and Publishable Key to the backend environment.
+5. Configure the webhook endpoint.
+6. Add the webhook signing secret to `STRIPE_WEBHOOK_SECRET`.
+7. Test successful, failed, and cancelled payment flows.
 
-## 🌍 Frontend Integration
+**Important:** Premium subscription activation must depend on verified server-side payment events. Do not activate a subscription only because the frontend redirects to a success page.
 
-The backend is designed to communicate with the WedPlan frontend.
+## 🔑 Google OAuth Configuration
 
-**Frontend Development URL:** `http://localhost:3000`
+Google authentication uses Google OAuth credentials.
 
-**Backend Development URL:** `http://localhost:5000`
+1. Open Google Cloud Console.
+2. Create or select a project.
+3. Configure the OAuth consent screen.
+4. Create OAuth 2.0 Client Credentials.
+5. Configure the required authorized origins and redirect URLs.
+6. Add the Client ID and Client Secret to the backend environment variables.
 
-The API supports authentication, service discovery, booking management, vendor operations, administration, and payment processing.
+## 🖼️ ImgBB Configuration
 
----
+WedPlan uses ImgBB for image hosting.
 
-## 🔒 Security Practices
+1. Create an ImgBB account.
+2. Generate an API key.
+3. Configure the key in the environment where the upload request is implemented.
+4. Test image uploads and verify the returned image URL.
 
-- Authentication and authorization are handled on the server.
-- Sensitive API credentials are stored in environment variables.
-- Protected routes verify user permissions.
-- Resource ownership is checked before modifying records.
-- Stripe webhook signatures are verified.
-- Payment operations are validated before updating transactions.
-- User roles cannot be trusted solely from frontend data.
+## 🚀 Deployment
 
----
+The WedPlan backend is deployed on Vercel.
 
-## 🚀 Project Goals
+**Live Backend:**
 
-- Build a reliable wedding service marketplace backend.
-- Provide secure authentication and role-based authorization.
-- Manage services, bookings, and subscriptions efficiently.
-- Integrate reliable online payment processing.
-- Maintain data consistency and protect user information.
-- Provide scalable RESTful APIs for frontend integration.
+https://wedplan-server-seven.vercel.app
+
+Before deployment:
+
+- Configure all backend environment variables in Vercel.
+- Verify MongoDB connection and database access.
+- Configure production frontend URLs.
+- Configure Google OAuth redirect URLs.
+- Configure Stripe webhook endpoint and signing secret.
+- Verify CORS configuration.
+- Test authentication, services, bookings, and subscriptions after deployment.
+
+## 🔒 Security Guidelines
+
+- Never commit `.env` files.
+- Never expose database credentials or private API keys.
+- Keep secrets in deployment environment settings.
+- Verify authentication tokens on the server.
+- Apply role-based authorization to protected routes.
+- Validate resource ownership before updating or deleting resources.
+- Verify Stripe webhook signatures.
+- Validate all important payment events on the backend.
+
+## 🌐 Project Links
+
+- **Live Website:** https://wedplan-client-rho.vercel.app
+- **Live Backend:** https://wedplan-server-seven.vercel.app
+- **Frontend Repository:** https://github.com/yousufali01/WedPlan_Client
+- **Backend Repository:** https://github.com/yousufali01/WedPlan_Server
+
+## 👨‍💻 Developer
+
+**WedPlan – Wedding Service Marketplace**
+
+Backend developed using Node.js, Express.js, MongoDB, Better Auth, JWT, and Stripe.
 
 ---
 
 <p align="center">
-
-  **WedPlan – Making Every Wedding Special. ❤️**
-
+  <strong>WedPlan – Making Every Wedding Special. ❤️</strong>
 </p>
