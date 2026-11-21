@@ -5,13 +5,23 @@ import { ObjectId } from "mongodb";
 import { getDB } from "../config/db.js";
 import { requireVendor } from "../(auth)/middleware.js";
 
-import {
-  PREMIUM_PLANS,
-  isPremiumActive,
-}from "../utils/subscription.js";
+import { PREMIUM_PLANS, isPremiumActive } from "../utils/subscription.js";
+
 const router = Router();
 
+/* ================= STRIPE CONFIGURATION ================= */
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  throw new Error("STRIPE_SECRET_KEY is missing.");
+}
+
+if (!process.env.CLIENT_URL) {
+  throw new Error("CLIENT_URL is missing.");
+}
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+/* ================= PLAN CONFIGURATION ================= */
 
 const PLANS = {
   free: {
@@ -38,6 +48,25 @@ const PLANS = {
     durationDays: 365,
   },
 };
+
+const validatePlan = (planId) => {
+  const plan = PLANS[planId];
+
+  if (!plan) {
+    throw new Error("Invalid subscription plan.");
+  }
+
+  if (
+    planId !== "free" &&
+    (!Number.isFinite(plan.amount) || plan.amount <= 0)
+  ) {
+    throw new Error("Subscription price is not configured.");
+  }
+
+  return plan;
+};
+
+/* ================= HELPERS ================= */
 
 const getVendorId = (req) => {
   const id = req.user?._id || req.user?.id;
@@ -67,9 +96,9 @@ const getVendorFilter = (vendorId) => {
 };
 
 const getSubscription = async (db, vendorId) => {
-  return db
-    .collection("subscriptions")
-    .findOne(getVendorFilter(vendorId), { sort: { createdAt: -1 } });
+  return db.collection("subscriptions").findOne(getVendorFilter(vendorId), {
+    sort: { createdAt: -1 },
+  });
 };
 
 const buildSubscriptionResponse = (subscription) => {
@@ -77,6 +106,8 @@ const buildSubscriptionResponse = (subscription) => {
     return {
       plan: "free",
       status: "inactive",
+      paymentStatus: "unpaid",
+      expiresAt: null,
       isPremium: false,
       subscription: null,
     };
@@ -92,103 +123,32 @@ const buildSubscriptionResponse = (subscription) => {
   };
 };
 
-const getPlan = (planId) => {
-  const plan = PLANS[planId];
+const getCheckoutUrls = () => ({
+  success_url: `${process.env.CLIENT_URL}/vendor/subscription?session_id={CHECKOUT_SESSION_ID}`,
 
-  if (!plan) {
-    throw new Error("Invalid subscription plan.");
-  }
+  cancel_url: `${process.env.CLIENT_URL}/vendor/subscription?payment=cancelled`,
+});
 
-  return plan;
-};
+/* ================= GET PLANS ================= */
 
-const createSubscriptionCheckout = async (req, res) => {
+router.get("/plans", (req, res) => {
   try {
-    const vendorId = getVendorId(req);
-    const { planId } = req.body;
-
-    if (!planId || !PREMIUM_PLANS.includes(planId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Please select a valid premium plan.",
-      });
-    }
-
-    const plan = getPlan(planId);
-
-    if (!Number.isFinite(plan.amount) || plan.amount <= 0) {
-      return res.status(500).json({
-        success: false,
-        message: "Subscription price is not configured.",
-      });
-    }
-
-    const db = getDB();
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-
-      payment_method_types: ["card"],
-
-      line_items: [
-        {
-          price_data: {
-            currency: plan.currency,
-            product_data: {
-              name: plan.name,
-              description: `WedPlan ${plan.name} subscription`,
-            },
-            unit_amount: Math.round(plan.amount * 100),
-          },
-          quantity: 1,
-        },
-      ],
-
-      metadata: {
-        vendorId: String(vendorId),
-        planId: plan.id,
-      },
-
-      success_url: `${process.env.CLIENT_URL}/vendor/subscription?session_id={CHECKOUT_SESSION_ID}`,
-
-      cancel_url: `${process.env.CLIENT_URL}/vendor/subscription?payment=cancelled`,
-    });
-
-    await db.collection("subscriptionPayments").insertOne({
-      vendorId,
-      plan: plan.id,
-      stripeSessionId: session.id,
-      amount: plan.amount,
-      currency: plan.currency,
-      status: "pending",
-      createdAt: new Date(),
-    });
-
     return res.status(200).json({
       success: true,
-      message: "Checkout session created successfully.",
-      checkoutUrl: session.url,
-      sessionId: session.id,
+      plans: Object.values(PLANS),
     });
   } catch (error) {
-    console.error("Create checkout session error:", error);
+    console.error("Plans error:", error);
 
     return res.status(500).json({
       success: false,
-      message: error.message || "Failed to create checkout session.",
+      message: "Failed to fetch plans.",
     });
   }
-};
-
-// GET /plans
-router.get("/plans", (req, res) => {
-  return res.status(200).json({
-    success: true,
-    plans: Object.values(PLANS),
-  });
 });
 
-// GET /mine
+/* ================= GET MY SUBSCRIPTION ================= */
+
 router.get("/mine", requireVendor, async (req, res) => {
   try {
     const db = getDB();
@@ -210,7 +170,231 @@ router.get("/mine", requireVendor, async (req, res) => {
   }
 });
 
-// GET /payment-methods
+/* ================= CREATE CHECKOUT SESSION ================= */
+
+const createSubscriptionCheckout = async (req, res) => {
+  try {
+    const vendorId = getVendorId(req);
+    const { planId } = req.body;
+
+    if (!PREMIUM_PLANS.includes(planId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a valid premium plan.",
+      });
+    }
+
+    const plan = validatePlan(planId);
+    const db = getDB();
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+
+      payment_method_types: ["card"],
+
+      line_items: [
+        {
+          price_data: {
+            currency: plan.currency,
+
+            product_data: {
+              name: `WedPlan ${plan.name}`,
+              description: `${plan.name} subscription`,
+            },
+
+            unit_amount: Math.round(plan.amount * 100),
+          },
+
+          quantity: 1,
+        },
+      ],
+
+      metadata: {
+        vendorId: String(vendorId),
+        planId: plan.id,
+      },
+
+      success_url: getCheckoutUrls().success_url,
+      cancel_url: getCheckoutUrls().cancel_url,
+    });
+
+    await db.collection("subscriptionPayments").updateOne(
+      { stripeSessionId: session.id },
+      {
+        $setOnInsert: {
+          vendorId,
+          plan: plan.id,
+          stripeSessionId: session.id,
+          amount: plan.amount,
+          currency: plan.currency,
+          status: "pending",
+          createdAt: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Checkout session created successfully.",
+      checkoutUrl: session.url,
+      sessionId: session.id,
+    });
+  } catch (error) {
+    console.error("Create checkout session error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Checkout failed.",
+    });
+  }
+};
+
+router.post(
+  "/create-checkout-session",
+  requireVendor,
+  createSubscriptionCheckout,
+);
+
+router.post("/upgrade", requireVendor, createSubscriptionCheckout);
+
+/* ================= VERIFY CHECKOUT PAYMENT ================= */
+
+router.post("/verify-stripe-session", requireVendor, async (req, res) => {
+  try {
+    const vendorId = getVendorId(req);
+    const { sessionId } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        message: "Stripe session ID is required.",
+      });
+    }
+
+    const db = getDB();
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (String(session.metadata?.vendorId) !== String(vendorId)) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid checkout session owner.",
+      });
+    }
+
+    if (session.mode !== "payment" || session.payment_status !== "paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment has not been completed.",
+      });
+    }
+
+    const planId = session.metadata?.planId;
+
+    if (!planId || !PREMIUM_PLANS.includes(planId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid subscription plan.",
+      });
+    }
+
+    const plan = validatePlan(planId);
+
+    if (
+      session.currency !== plan.currency ||
+      session.amount_total !== Math.round(plan.amount * 100)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment amount verification failed.",
+      });
+    }
+
+    const existingPayment = await db
+      .collection("subscriptionPayments")
+      .findOne({ stripeSessionId: session.id });
+
+    if (!existingPayment) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment record not found.",
+      });
+    }
+
+    if (existingPayment.status === "paid") {
+      const existingSubscription = await db
+        .collection("subscriptions")
+        .findOne({ stripeSessionId: session.id });
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified.",
+        subscription: buildSubscriptionResponse(existingSubscription),
+      });
+    }
+
+    const now = new Date();
+
+    const expiresAt = new Date(
+      now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000,
+    );
+
+    const subscriptionData = {
+      vendorId,
+      plan: plan.id,
+      status: "active",
+      paymentStatus: "paid",
+      stripeSessionId: session.id,
+      stripePaymentIntentId:
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : session.payment_intent?.id || null,
+      amount: session.amount_total / 100,
+      currency: session.currency,
+      startedAt: now,
+      expiresAt,
+      cancelAtPeriodEnd: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await db.collection("subscriptions").updateOne(
+      { stripeSessionId: session.id },
+      {
+        $set: subscriptionData,
+      },
+      { upsert: true },
+    );
+
+    await db.collection("subscriptionPayments").updateOne(
+      { stripeSessionId: session.id },
+      {
+        $set: {
+          status: "paid",
+          paymentIntentId: subscriptionData.stripePaymentIntentId,
+          updatedAt: now,
+        },
+      },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Subscription activated successfully.",
+      subscription: buildSubscriptionResponse(subscriptionData),
+    });
+  } catch (error) {
+    console.error("Verify payment error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Payment verification failed.",
+    });
+  }
+});
+
+/* ================= PAYMENT METHODS ================= */
+
 router.get("/payment-methods", requireVendor, async (req, res) => {
   try {
     const db = getDB();
@@ -220,34 +404,30 @@ router.get("/payment-methods", requireVendor, async (req, res) => {
       .collection("user")
       .findOne(getVendorFilter(vendorId));
 
-    const customerId = vendor?.stripeCustomerId;
-
-    if (!customerId) {
+    if (!vendor?.stripeCustomerId) {
       return res.status(200).json({
         success: true,
         paymentMethods: [],
       });
     }
 
-    const paymentMethods = await stripe.paymentMethods.list({
-      customer: customerId,
+    const methods = await stripe.paymentMethods.list({
+      customer: vendor.stripeCustomerId,
       type: "card",
     });
 
-    const safePaymentMethods = paymentMethods.data.map((method) => ({
-      id: method.id,
-      brand: method.card?.brand,
-      last4: method.card?.last4,
-      expMonth: method.card?.exp_month,
-      expYear: method.card?.exp_year,
-    }));
-
     return res.status(200).json({
       success: true,
-      paymentMethods: safePaymentMethods,
+      paymentMethods: methods.data.map((method) => ({
+        id: method.id,
+        brand: method.card?.brand,
+        last4: method.card?.last4,
+        expMonth: method.card?.exp_month,
+        expYear: method.card?.exp_year,
+      })),
     });
   } catch (error) {
-    console.error("Get payment methods error:", error);
+    console.error("Payment methods error:", error);
 
     return res.status(500).json({
       success: false,
@@ -256,17 +436,8 @@ router.get("/payment-methods", requireVendor, async (req, res) => {
   }
 });
 
-// POST /create-checkout-session
-router.post(
-  "/create-checkout-session",
-  requireVendor,
-  createSubscriptionCheckout,
-);
+/* ================= DOWNGRADE ================= */
 
-// POST /upgrade
-router.post("/upgrade", requireVendor, createSubscriptionCheckout);
-
-// POST /downgrade
 router.post("/downgrade", requireVendor, async (req, res) => {
   try {
     const db = getDB();
@@ -277,7 +448,7 @@ router.post("/downgrade", requireVendor, async (req, res) => {
     if (!subscription || !isPremiumActive(subscription)) {
       return res.status(400).json({
         success: false,
-        message: "You do not have an active premium subscription.",
+        message: "No active premium subscription.",
       });
     }
 
@@ -293,10 +464,10 @@ router.post("/downgrade", requireVendor, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Subscription will not renew after the current period.",
+      message: "Subscription cancellation scheduled.",
     });
   } catch (error) {
-    console.error("Downgrade subscription error:", error);
+    console.error("Downgrade error:", error);
 
     return res.status(500).json({
       success: false,
@@ -305,35 +476,25 @@ router.post("/downgrade", requireVendor, async (req, res) => {
   }
 });
 
-// POST /pay
+/* ================= DIRECT PAYMENT ================= */
+/*
+  This route is kept for compatibility with your existing frontend.
+  Checkout is the recommended flow. Do not use both flows for one purchase.
+*/
+
 router.post("/pay", requireVendor, async (req, res) => {
   try {
     const vendorId = getVendorId(req);
     const { planId, paymentMethodId } = req.body;
 
-    if (!planId || !PREMIUM_PLANS.includes(planId)) {
+    if (!PREMIUM_PLANS.includes(planId) || !paymentMethodId) {
       return res.status(400).json({
         success: false,
-        message: "Please select a valid premium plan.",
+        message: "Valid plan and payment method are required.",
       });
     }
 
-    if (!paymentMethodId) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment method is required.",
-      });
-    }
-
-    const plan = getPlan(planId);
-
-    if (!Number.isFinite(plan.amount) || plan.amount <= 0) {
-      return res.status(500).json({
-        success: false,
-        message: "Subscription price is not configured.",
-      });
-    }
-
+    const plan = validatePlan(planId);
     const db = getDB();
 
     const vendor = await db
@@ -353,9 +514,7 @@ router.post("/pay", requireVendor, async (req, res) => {
       const customer = await stripe.customers.create({
         email: vendor.email,
         name: vendor.name,
-        metadata: {
-          vendorId: String(vendorId),
-        },
+        metadata: { vendorId: String(vendorId) },
       });
 
       customerId = customer.id;
@@ -390,9 +549,6 @@ router.post("/pay", requireVendor, async (req, res) => {
     }
 
     const now = new Date();
-    const expiresAt = new Date(
-      now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000,
-    );
 
     const subscriptionData = {
       vendorId,
@@ -403,10 +559,10 @@ router.post("/pay", requireVendor, async (req, res) => {
       amount: plan.amount,
       currency: plan.currency,
       startedAt: now,
-      expiresAt,
+      expiresAt: new Date(now.getTime() + plan.durationDays * 86400000),
       cancelAtPeriodEnd: false,
-      updatedAt: now,
       createdAt: now,
+      updatedAt: now,
     };
 
     await db.collection("subscriptions").insertOne(subscriptionData);
@@ -423,128 +579,15 @@ router.post("/pay", requireVendor, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Subscription payment successful.",
+      message: "Payment successful.",
       subscription: buildSubscriptionResponse(subscriptionData),
     });
   } catch (error) {
-    console.error("Subscription payment error:", error);
+    console.error("Direct payment error:", error);
 
     return res.status(500).json({
       success: false,
       message: error.message || "Payment failed.",
-    });
-  }
-});
-
-// POST /verify-stripe-session
-router.post("/verify-stripe-session", requireVendor, async (req, res) => {
-  try {
-    const vendorId = getVendorId(req);
-    const { sessionId } = req.body;
-
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        message: "Stripe session ID is required.",
-      });
-    }
-
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-    if (String(session.metadata?.vendorId) !== String(vendorId)) {
-      return res.status(403).json({
-        success: false,
-        message: "This checkout session does not belong to you.",
-      });
-    }
-
-    if (session.payment_status !== "paid") {
-      return res.status(400).json({
-        success: false,
-        message: "Payment has not been completed.",
-      });
-    }
-
-    const planId = session.metadata?.planId;
-
-    if (!planId || !PREMIUM_PLANS.includes(planId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid subscription plan in checkout session.",
-      });
-    }
-
-    const db = getDB();
-
-    const existingPayment = await db
-      .collection("subscriptionPayments")
-      .findOne({ stripeSessionId: session.id });
-
-    if (existingPayment?.status === "paid") {
-      const existingSubscription = await getSubscription(db, vendorId);
-
-      return res.status(200).json({
-        success: true,
-        message: "Payment was already verified.",
-        subscription: buildSubscriptionResponse(existingSubscription),
-      });
-    }
-
-    const plan = getPlan(planId);
-    const now = new Date();
-
-    const expiresAt = new Date(
-      now.getTime() + plan.durationDays * 24 * 60 * 60 * 1000,
-    );
-
-    const subscriptionData = {
-      vendorId,
-      plan: plan.id,
-      status: "active",
-      paymentStatus: "paid",
-      stripeSessionId: session.id,
-      stripePaymentIntentId: session.payment_intent,
-      amount: session.amount_total / 100,
-      currency: session.currency,
-      startedAt: now,
-      expiresAt,
-      cancelAtPeriodEnd: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    await db.collection("subscriptions").insertOne(subscriptionData);
-
-    await db.collection("subscriptionPayments").updateOne(
-      { stripeSessionId: session.id },
-      {
-        $set: {
-          status: "paid",
-          paymentIntentId: session.payment_intent,
-          updatedAt: now,
-        },
-        $setOnInsert: {
-          vendorId,
-          plan: plan.id,
-          amount: session.amount_total / 100,
-          currency: session.currency,
-          createdAt: now,
-        },
-      },
-      { upsert: true },
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "Subscription activated successfully.",
-      subscription: buildSubscriptionResponse(subscriptionData),
-    });
-  } catch (error) {
-    console.error("Verify Stripe session error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Failed to verify Stripe payment.",
     });
   }
 });

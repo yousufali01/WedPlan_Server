@@ -1,3 +1,4 @@
+
 import { MongoClient, ServerApiVersion } from "mongodb";
 
 let client = null;
@@ -34,7 +35,7 @@ const buildUri = () => {
       .replace("<db_password>", encodeURIComponent(dbPassword));
   }
 
-  // Add credentials if they are not already included
+  // Add credentials if not already included
   else if (!hasCredentials) {
     if (!dbUser || !dbPassword) {
       throw new Error(
@@ -49,7 +50,9 @@ const buildUri = () => {
         : null;
 
     if (!scheme) {
-      throw new Error("DB_URI must start with mongodb:// or mongodb+srv://");
+      throw new Error(
+        "DB_URI must start with mongodb:// or mongodb+srv://",
+      );
     }
 
     const rest = uri.slice(scheme.length);
@@ -60,8 +63,11 @@ const buildUri = () => {
       rest;
   }
 
-  // Validate final URI format
-  if (!uri.startsWith("mongodb://") && !uri.startsWith("mongodb+srv://")) {
+  // Validate URI
+  if (
+    !uri.startsWith("mongodb://") &&
+    !uri.startsWith("mongodb+srv://")
+  ) {
     throw new Error("Invalid MongoDB connection URI.");
   }
 
@@ -72,6 +78,38 @@ const buildUri = () => {
   }
 
   return uri;
+};
+
+// ─────────────────────────────────────────────
+// CREATE DATABASE INDEXES
+// ─────────────────────────────────────────────
+
+const createDatabaseIndexes = async (database) => {
+  // Subscription unique Stripe session index
+  await database.collection("subscriptions").createIndex(
+    { stripeSessionId: 1 },
+    {
+      name: "unique_stripe_subscription_session",
+      unique: true,
+      partialFilterExpression: {
+        stripeSessionId: { $type: "string" },
+      },
+    },
+  );
+
+  // Payment unique Stripe session index
+  await database.collection("subscriptionPayments").createIndex(
+    { stripeSessionId: 1 },
+    {
+      name: "unique_stripe_payment_session",
+      unique: true,
+      partialFilterExpression: {
+        stripeSessionId: { $type: "string" },
+      },
+    },
+  );
+
+  console.log("Subscription indexes created successfully.");
 };
 
 // ─────────────────────────────────────────────
@@ -108,18 +146,29 @@ const connectDB = async () => {
 
       await newClient.connect();
 
-      const database = newClient.db(process.env.DB_NAME || "WedPlan");
+      const database = newClient.db(
+        process.env.DB_NAME || "WedPlan",
+      );
 
       await database.command({ ping: 1 });
 
+      // Assign connected database
       client = newClient;
       db = database;
 
-      console.log(`MongoDB Connected Successfully: ${database.databaseName}`);
+      console.log(
+        `MongoDB Connected Successfully: ${database.databaseName}`,
+      );
+
+      // Create indexes only after successful connection
+      await createDatabaseIndexes(database);
 
       return db;
     } catch (error) {
-      console.error("MongoDB Connection Failed:", error.message);
+      console.error(
+        "MongoDB Connection Failed:",
+        error.message,
+      );
 
       if (newClient) {
         await newClient.close().catch(() => {});
@@ -145,7 +194,9 @@ const connectDB = async () => {
 
 const getDB = () => {
   if (!db) {
-    throw new Error("Database is not connected. Call connectDB() first.");
+    throw new Error(
+      "Database is not connected. Call connectDB() first.",
+    );
   }
 
   return db;
@@ -185,4 +236,10 @@ const closeDB = async () => {
 // EXPORTS
 // ─────────────────────────────────────────────
 
-export { connectDB, getDB, getClient, closeDB, buildUri };
+export {
+  connectDB,
+  getDB,
+  getClient,
+  closeDB,
+  buildUri,
+};
