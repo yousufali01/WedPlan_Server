@@ -1,3 +1,4 @@
+
 import { Router } from "express";
 import Stripe from "stripe";
 import { ObjectId } from "mongodb";
@@ -5,7 +6,10 @@ import { ObjectId } from "mongodb";
 import { getDB } from "../config/db.js";
 import { requireVendor } from "../(auth)/middleware.js";
 
-import { PREMIUM_PLANS, isPremiumActive } from "../utils/subscription.js";
+import {
+  PREMIUM_PLANS,
+  isPremiumActive,
+} from "../utils/subscription.js";
 
 const router = Router();
 
@@ -20,6 +24,8 @@ if (!process.env.CLIENT_URL) {
 }
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+const CLIENT_URL = process.env.CLIENT_URL.replace(/\/+$/, "");
 
 /* ================= PLAN CONFIGURATION ================= */
 
@@ -96,9 +102,10 @@ const getVendorFilter = (vendorId) => {
 };
 
 const getSubscription = async (db, vendorId) => {
-  return db.collection("subscriptions").findOne(getVendorFilter(vendorId), {
-    sort: { createdAt: -1 },
-  });
+  return db.collection("subscriptions").findOne(
+    getVendorFilter(vendorId),
+    { sort: { createdAt: -1 } },
+  );
 };
 
 const buildSubscriptionResponse = (subscription) => {
@@ -124,9 +131,8 @@ const buildSubscriptionResponse = (subscription) => {
 };
 
 const getCheckoutUrls = () => ({
-  success_url: `${process.env.CLIENT_URL}/vendor/subscription?session_id={CHECKOUT_SESSION_ID}`,
-
-  cancel_url: `${process.env.CLIENT_URL}/vendor/subscription?payment=cancelled`,
+  success_url: `${CLIENT_URL}/vendor/subscription?session_id={CHECKOUT_SESSION_ID}`,
+  cancel_url: `${CLIENT_URL}/vendor/subscription?payment=cancelled`,
 });
 
 /* ================= GET PLANS ================= */
@@ -189,8 +195,6 @@ const createSubscriptionCheckout = async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-
-      payment_method_types: ["card"],
 
       line_items: [
         {
@@ -283,7 +287,10 @@ router.post("/verify-stripe-session", requireVendor, async (req, res) => {
       });
     }
 
-    if (session.mode !== "payment" || session.payment_status !== "paid") {
+    if (
+      session.mode !== "payment" ||
+      session.payment_status !== "paid"
+    ) {
       return res.status(400).json({
         success: false,
         message: "Payment has not been completed.",
@@ -311,9 +318,12 @@ router.post("/verify-stripe-session", requireVendor, async (req, res) => {
       });
     }
 
-    const existingPayment = await db
-      .collection("subscriptionPayments")
-      .findOne({ stripeSessionId: session.id });
+    const paymentCollection = db.collection("subscriptionPayments");
+
+    const existingPayment = await paymentCollection.findOne({
+      stripeSessionId: session.id,
+      ...getVendorFilter(vendorId),
+    });
 
     if (!existingPayment) {
       return res.status(400).json({
@@ -325,7 +335,10 @@ router.post("/verify-stripe-session", requireVendor, async (req, res) => {
     if (existingPayment.status === "paid") {
       const existingSubscription = await db
         .collection("subscriptions")
-        .findOne({ stripeSessionId: session.id });
+        .findOne({
+          stripeSessionId: session.id,
+          ...getVendorFilter(vendorId),
+        });
 
       return res.status(200).json({
         success: true,
@@ -346,10 +359,12 @@ router.post("/verify-stripe-session", requireVendor, async (req, res) => {
       status: "active",
       paymentStatus: "paid",
       stripeSessionId: session.id,
+
       stripePaymentIntentId:
         typeof session.payment_intent === "string"
           ? session.payment_intent
           : session.payment_intent?.id || null,
+
       amount: session.amount_total / 100,
       currency: session.currency,
       startedAt: now,
@@ -360,15 +375,21 @@ router.post("/verify-stripe-session", requireVendor, async (req, res) => {
     };
 
     await db.collection("subscriptions").updateOne(
-      { stripeSessionId: session.id },
+      {
+        stripeSessionId: session.id,
+        ...getVendorFilter(vendorId),
+      },
       {
         $set: subscriptionData,
       },
       { upsert: true },
     );
 
-    await db.collection("subscriptionPayments").updateOne(
-      { stripeSessionId: session.id },
+    await paymentCollection.updateOne(
+      {
+        stripeSessionId: session.id,
+        ...getVendorFilter(vendorId),
+      },
       {
         $set: {
           status: "paid",
@@ -400,9 +421,13 @@ router.get("/payment-methods", requireVendor, async (req, res) => {
     const db = getDB();
     const vendorId = getVendorId(req);
 
-    const vendor = await db
-      .collection("user")
-      .findOne(getVendorFilter(vendorId));
+    const vendor = await db.collection("user").findOne({
+      _id: vendorId instanceof ObjectId
+        ? vendorId
+        : ObjectId.isValid(String(vendorId))
+          ? new ObjectId(String(vendorId))
+          : vendorId,
+    });
 
     if (!vendor?.stripeCustomerId) {
       return res.status(200).json({
@@ -477,10 +502,6 @@ router.post("/downgrade", requireVendor, async (req, res) => {
 });
 
 /* ================= DIRECT PAYMENT ================= */
-/*
-  This route is kept for compatibility with your existing frontend.
-  Checkout is the recommended flow. Do not use both flows for one purchase.
-*/
 
 router.post("/pay", requireVendor, async (req, res) => {
   try {
@@ -497,9 +518,13 @@ router.post("/pay", requireVendor, async (req, res) => {
     const plan = validatePlan(planId);
     const db = getDB();
 
-    const vendor = await db
-      .collection("user")
-      .findOne(getVendorFilter(vendorId));
+    const vendor = await db.collection("user").findOne({
+      _id: vendorId instanceof ObjectId
+        ? vendorId
+        : ObjectId.isValid(String(vendorId))
+          ? new ObjectId(String(vendorId))
+          : vendorId,
+    });
 
     if (!vendor) {
       return res.status(404).json({
@@ -514,17 +539,22 @@ router.post("/pay", requireVendor, async (req, res) => {
       const customer = await stripe.customers.create({
         email: vendor.email,
         name: vendor.name,
-        metadata: { vendorId: String(vendorId) },
+        metadata: {
+          vendorId: String(vendorId),
+        },
       });
 
       customerId = customer.id;
 
-      await db.collection("user").updateOne(getVendorFilter(vendorId), {
-        $set: {
-          stripeCustomerId: customerId,
-          updatedAt: new Date(),
+      await db.collection("user").updateOne(
+        { _id: vendor._id },
+        {
+          $set: {
+            stripeCustomerId: customerId,
+            updatedAt: new Date(),
+          },
         },
-      });
+      );
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
@@ -534,6 +564,7 @@ router.post("/pay", requireVendor, async (req, res) => {
       payment_method: paymentMethodId,
       confirm: true,
       off_session: true,
+
       metadata: {
         vendorId: String(vendorId),
         planId: plan.id,
@@ -559,7 +590,9 @@ router.post("/pay", requireVendor, async (req, res) => {
       amount: plan.amount,
       currency: plan.currency,
       startedAt: now,
-      expiresAt: new Date(now.getTime() + plan.durationDays * 86400000),
+      expiresAt: new Date(
+        now.getTime() + plan.durationDays * 86400000,
+      ),
       cancelAtPeriodEnd: false,
       createdAt: now,
       updatedAt: now,
