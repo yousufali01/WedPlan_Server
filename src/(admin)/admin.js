@@ -11,6 +11,8 @@ import { getAuth } from "../(auth)/auth.js";
 import { getDB } from "../config/db.js";
 import { requireAdmin } from "../(auth)/middleware.js";
 import { sanitizeUser, toId } from "../utils/helpers.js";
+import { isPremiumActive } from "../utils/subscription.js";
+import { ObjectId } from "mongodb";
 
 const router = express.Router();
 
@@ -287,16 +289,39 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
       .sort({ createdAt: -1 })
       .toArray();
 
-    // 2. Fetch vendor subscriptions
-    const vendorsWithSub = await db
-      .collection("user")
-      .find({
-        role: "vendor",
-        "subscription.plan": {
-          $in: ["premium_monthly", "premium_yearly"],
-        },
-      })
+    // 2. Fetch vendor subscriptions — they live in their OWN collection
+    //    (`subscriptions`), NOT as a `subscription` field on the user doc.
+    const subscriptions = await db
+      .collection("subscriptions")
+      .find({ plan: { $in: ["premium_monthly", "premium_yearly"] } })
+      .sort({ createdAt: -1 })
       .toArray();
+
+    // 3. Paid payment records = actual revenue collected.
+    const paidPayments = await db
+      .collection("subscriptionPayments")
+      .find({ status: "paid" })
+      .toArray();
+
+    // Resolve vendor display names (vendorId may be ObjectId or string).
+    const vendorIds = [
+      ...new Set(subscriptions.map((s) => String(s.vendorId))),
+    ];
+    const vendorDocs = vendorIds.length
+      ? await db
+          .collection("user")
+          .find({
+            $or: vendorIds.flatMap((id) =>
+              ObjectId.isValid(id)
+                ? [{ _id: new ObjectId(id) }, { _id: id }]
+                : [{ _id: id }],
+            ),
+          })
+          .toArray()
+      : [];
+    const vendorById = new Map(
+      vendorDocs.map((v) => [String(v._id), v]),
+    );
 
     const transactions = [];
 
@@ -320,22 +345,22 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
     }
 
     // Map subscriptions
-    for (const v of vendorsWithSub) {
-      const isYearly = v.subscription?.plan === "premium_yearly";
+    for (const s of subscriptions) {
+      const vendor = vendorById.get(String(s.vendorId));
+      const isYearly = s.plan === "premium_yearly";
 
       transactions.push({
-        id: `sub-${v._id.toHexString()}`,
+        id: `sub-${String(s._id)}`,
         type: "subscription",
         title: isYearly
           ? "Vendor Premium Yearly Membership"
           : "Vendor Premium Monthly Membership",
-        customer: v.name || v.email,
-        vendor: v.businessName || v.studioName || v.name,
-        amount: isYearly ? 290 : 29,
-        currency: "USD",
-        status: v.subscription?.status || "active",
-        date:
-          v.subscription?.startedAt || v.subscription?.updatedAt || new Date(),
+        customer: vendor?.name || vendor?.email || "Vendor",
+        vendor: vendor?.businessName || vendor?.studioName || vendor?.name || "Vendor",
+        amount: Number(s.amount) || (isYearly ? 290 : 29),
+        currency: String(s.currency || "usd").toUpperCase(),
+        status: s.status || "active",
+        date: s.startedAt || s.createdAt || new Date(),
       });
     }
 
@@ -347,9 +372,22 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
       .filter((b) => b.status === "accepted")
       .reduce((acc, curr) => acc + (Number(curr.servicePrice) || 0), 0);
 
-    const totalSubRevenue = vendorsWithSub.reduce((acc, curr) => {
-      return acc + (curr.subscription?.plan === "premium_yearly" ? 290 : 29);
-    }, 0);
+    // Real revenue: every paid Stripe payment (renewals included).
+    // Falls back to paid subscription docs if the payments collection is empty.
+    let totalSubRevenue = paidPayments.reduce(
+      (acc, p) => acc + (Number(p.amount) || 0),
+      0,
+    );
+
+    if (paidPayments.length === 0) {
+      totalSubRevenue = subscriptions
+        .filter((s) => s.paymentStatus === "paid")
+        .reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+    }
+
+    const activeSubscriptions = subscriptions.filter((s) =>
+      isPremiumActive(s),
+    ).length;
 
     res.status(200).json({
       success: true,
@@ -359,7 +397,7 @@ router.get("/transactions", requireAdmin, async (req, res, next) => {
         totalBookingValue,
         totalSubRevenue,
         totalBookings: bookings.length,
-        activeSubscriptions: vendorsWithSub.length,
+        activeSubscriptions,
       },
     });
   } catch (error) {
