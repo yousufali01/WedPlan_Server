@@ -98,6 +98,16 @@ const initAuth = (db, client) => {
           input: false,
         },
 
+        // Admin review decision: "pending" | "approved" | "rejected".
+        // Kept separate from vendorApproved because a rejected vendor is also
+        // vendorApproved === false — without it the pending queue could not
+        // tell "never reviewed" from "rejected".
+        vendorReviewStatus: {
+          type: "string",
+          required: false,
+          input: false,
+        },
+
         businessName: {
           type: "string",
           required: false,

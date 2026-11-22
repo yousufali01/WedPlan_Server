@@ -117,11 +117,26 @@ router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
       });
     }
 
+    // Record the DECISION, not just the boolean:
+    //  - approve            → "approved"
+    //  - reject a pending   → "rejected"  (leaves the pending queue)
+    //  - revoke an approval → "pending"   (returns to the pending queue)
+    // Before this, rejection only wrote vendorApproved: false, which the
+    // pending query (vendorApproved !== true) still matched, so the rejected
+    // application instantly reappeared under "Pending Vendor Approvals".
+    const wasApproved = user.vendorApproved === true;
+    const vendorReviewStatus = approved
+      ? "approved"
+      : wasApproved
+        ? "pending"
+        : "rejected";
+
     await db.collection("user").updateOne(
       { _id: user._id },
       {
         $set: {
           vendorApproved: approved,
+          vendorReviewStatus,
           updatedAt: new Date(),
         },
       },
@@ -146,6 +161,7 @@ router.patch("/vendors/:id/approval", requireAdmin, async (req, res, next) => {
       vendor: sanitizeUser({
         ...user,
         vendorApproved: approved,
+        vendorReviewStatus,
       }),
     });
   } catch (error) {
@@ -162,7 +178,11 @@ router.get("/vendors/pending", requireAdmin, async (req, res, next) => {
       .collection("user")
       .find({
         role: "vendor",
+        // Not approved yet...
         vendorApproved: { $ne: true },
+        // ...and not already rejected by an admin (otherwise a rejected
+        // application would sit in this queue forever).
+        vendorReviewStatus: { $ne: "rejected" },
       })
       .sort({ createdAt: -1 })
       .toArray();

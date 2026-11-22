@@ -73,6 +73,9 @@ router.post("/apply-vendor", requireAuth, async (req, res, next) => {
         $set: {
           role: "vendor",
           vendorApproved: false,
+          // (Re)application always re-enters the admin review queue — this
+          // also lets a previously rejected vendor apply again.
+          vendorReviewStatus: "pending",
           updatedAt: new Date(),
         },
       },

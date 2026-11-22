@@ -40,12 +40,22 @@ const sanitizeUser = (user) => {
     image,
     role,
     vendorApproved,
+    vendorReviewStatus,
     banned,
     banReason,
     banExpires,
     createdAt,
     updatedAt,
   } = user;
+
+  // Effective review state: approved vendors are always "approved", a vendor
+  // an admin explicitly rejected stays "rejected", everything else (never
+  // reviewed / revoked) is still "pending".
+  const reviewStatus = vendorApproved
+    ? "approved"
+    : vendorReviewStatus === "rejected"
+      ? "rejected"
+      : "pending";
 
   return {
     id,
@@ -55,6 +65,7 @@ const sanitizeUser = (user) => {
     image: image ?? null,
     role: role ?? "customer",
     vendorApproved: Boolean(vendorApproved),
+    vendorReviewStatus: reviewStatus,
     banned: Boolean(banned),
     banReason: banReason ?? null,
     banExpires: banExpires ?? null,
